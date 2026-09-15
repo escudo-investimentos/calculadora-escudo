@@ -1,0 +1,969 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Calculadora de Aplicações</title>
+<meta name="theme-color" content="#0e6b5c">
+<meta name="description" content="Calculadora de rendimento, IOF e IRRF mensal por banco, com histórico salvo mês a mês.">
+
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Calculadora">
+<meta name="mobile-web-app-capable" content="yes">
+
+<!-- Firebase (compat build, funciona com <script> normal, sem precisa de build) -->
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
+  :root{
+    --paper:#f4f5f1; --surface:#ffffff; --surface-2:#eceee8; --line:#dbe0da;
+    --ink:#182420; --ink-dim:#5b6862; --ink-faint:#8b9690;
+    --accent:#0e6b5c; --accent-ink:#ffffff; --accent-soft:#e3efec;
+    --gold:#a9782f; --gold-soft:#f3e8d4;
+    --good:#1f7a52; --good-soft:#e6f2ea;
+    --bad:#a8412b; --bad-soft:#f7e8e3;
+    --shadow: 0 1px 2px rgba(20,30,26,.06), 0 6px 16px rgba(20,30,26,.06);
+    --radius: 10px;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --paper:#101513; --surface:#171f1c; --surface-2:#1d2622; --line:#2b3733;
+      --ink:#e9ede9; --ink-dim:#9fada6; --ink-faint:#6d7a74;
+      --accent:#3db8a1; --accent-ink:#08211c; --accent-soft:#1a3530;
+      --gold:#d9ac5c; --gold-soft:#31291a;
+      --good:#4bbf8c; --good-soft:#173428;
+      --bad:#e0836a; --bad-soft:#3a2420;
+      --shadow: 0 1px 2px rgba(0,0,0,.5), 0 8px 20px rgba(0,0,0,.4);
+    }
+  }
+  :root[data-theme="dark"]{
+    --paper:#101513; --surface:#171f1c; --surface-2:#1d2622; --line:#2b3733;
+    --ink:#e9ede9; --ink-dim:#9fada6; --ink-faint:#6d7a74;
+    --accent:#3db8a1; --accent-ink:#08211c; --accent-soft:#1a3530;
+    --gold:#d9ac5c; --gold-soft:#31291a;
+    --good:#4bbf8c; --good-soft:#173428;
+    --bad:#e0836a; --bad-soft:#3a2420;
+    --shadow: 0 1px 2px rgba(0,0,0,.5), 0 8px 20px rgba(0,0,0,.4);
+  }
+
+  *{box-sizing:border-box;}
+  html,body{ margin:0; }
+  body{ background:var(--paper); color:var(--ink); font-family:'IBM Plex Sans',system-ui,sans-serif;
+    padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px); }
+  .num{ font-family:'IBM Plex Mono',ui-monospace,monospace; font-variant-numeric:tabular-nums; }
+  .display{ font-family:'Fraunces',serif; }
+  a{color:var(--accent);}
+
+  #app{ max-width:1180px; margin:0 auto; padding:20px 16px 48px; }
+
+  .topbar{ display:flex; align-items:baseline; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:20px; }
+  .topbar h1{ font-size:1.5rem; margin:0; font-weight:600; letter-spacing:-.01em; }
+  .topbar .sub{ color:var(--ink-dim); font-size:.85rem; }
+  .storage-pill{ display:inline-flex; align-items:center; gap:6px; font-size:.72rem; color:var(--ink-dim); background:var(--surface-2); border:1px solid var(--line); border-radius:999px; padding:4px 10px; white-space:nowrap; }
+  .storage-pill .dot{ width:6px; height:6px; border-radius:50%; background:var(--good); }
+  .storage-pill.local .dot{ background:var(--gold); }
+
+  .layout{ display:grid; grid-template-columns:260px 1fr; gap:18px; align-items:start; }
+  @media (max-width: 780px){ .layout{ grid-template-columns:1fr; } }
+
+  .panel{ background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); box-shadow:var(--shadow); }
+  .sidebar{ padding:12px; display:flex; flex-direction:column; gap:8px; }
+  .sidebar-title{ font-size:.72rem; text-transform:uppercase; letter-spacing:.06em; color:var(--ink-faint); padding:6px 8px 2px; }
+
+  .conta-card{ display:flex; flex-direction:column; gap:2px; text-align:left; padding:10px 12px; border-radius:8px; border:1px solid transparent; background:none; cursor:pointer; width:100%; }
+  .conta-card:hover{ background:var(--surface-2); }
+  .conta-card.active{ background:var(--accent-soft); border-color:var(--accent); }
+  .conta-card .nome{ font-weight:600; font-size:.92rem; }
+  .conta-card .banco{ font-size:.72rem; color:var(--ink-dim); }
+  .conta-card .saldo{ font-size:.82rem; margin-top:2px; }
+
+  .btn{ font-family:inherit; font-size:.85rem; font-weight:500; border-radius:8px; border:1px solid var(--line); background:var(--surface); color:var(--ink); padding:9px 14px; cursor:pointer; display:inline-flex; align-items:center; gap:6px; }
+  .btn:hover{ background:var(--surface-2); }
+  .btn.primary{ background:var(--accent); color:var(--accent-ink); border-color:var(--accent); }
+  .btn.primary:hover{ filter:brightness(1.06); }
+  .btn.ghost{ background:transparent; border-color:transparent; color:var(--ink-dim); }
+  .btn.ghost:hover{ background:var(--surface-2); }
+  .btn.danger{ color:var(--bad); }
+  .btn:disabled{ opacity:.45; cursor:not-allowed; }
+  .btn-add{ margin:2px 4px 0; }
+
+  .main{ padding:20px 22px 24px; min-height:420px; }
+  .main-header{ display:flex; justify-content:space-between; align-items:flex-start; gap:16px; flex-wrap:wrap; margin-bottom:10px; }
+  .main-header h2{ margin:0 0 2px; font-size:1.2rem; font-weight:600; }
+  .badge{ display:inline-block; font-size:.7rem; color:var(--ink-dim); background:var(--surface-2); border:1px solid var(--line); border-radius:999px; padding:2px 9px; margin-top:4px; }
+  .saldo-hero{ text-align:right; }
+  .saldo-hero .label{ font-size:.72rem; color:var(--ink-dim); }
+  .saldo-hero .valor{ font-size:1.5rem; font-weight:600; }
+
+  .tabs{ display:flex; gap:4px; border-bottom:1px solid var(--line); margin:14px 0 18px; }
+  .tab{ font-size:.85rem; font-weight:500; color:var(--ink-dim); padding:8px 4px; border-bottom:2px solid transparent; cursor:pointer; background:none; border-top:none; border-left:none; border-right:none; margin-right:18px; }
+  .tab.active{ color:var(--ink); border-bottom-color:var(--accent); }
+
+  .empty{ color:var(--ink-dim); font-size:.9rem; padding:40px 8px; text-align:center; }
+
+  .field-row{ display:flex; align-items:center; gap:10px; margin-top:12px; }
+  .month-input{ font-family:'IBM Plex Mono',monospace; font-size:.9rem; border:1px solid var(--line); border-radius:7px; padding:7px 10px; background:var(--surface); color:var(--ink); }
+
+  fieldset.group{ border:1px solid var(--line); border-radius:9px; padding:12px 14px 14px; margin:0 0 14px; }
+  fieldset.group legend{ font-size:.78rem; font-weight:600; color:var(--ink-dim); padding:0 4px; text-transform:uppercase; letter-spacing:.03em; }
+  .group.optional summary{ cursor:pointer; font-size:.82rem; color:var(--accent); font-weight:500; list-style:none; }
+  .group.optional summary::-webkit-details-marker{ display:none; }
+  .group.optional summary::before{ content:"+ "; }
+  .group.optional[open] summary::before{ content:"– "; }
+
+  .fields-grid{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px 12px; margin-top:10px; }
+  @media (max-width: 640px){ .fields-grid{ grid-template-columns:1fr 1fr; } }
+  .fields-grid.cols-2{ grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .fields-grid.cols-1{ grid-template-columns:1fr; max-width:280px; }
+
+  .f{ display:flex; flex-direction:column; gap:4px; }
+  .f label{ font-size:.74rem; color:var(--ink-dim); }
+  .f label .help{ display:block; font-size:.68rem; color:var(--ink-faint); font-weight:400; }
+  .f input{ font-family:'IBM Plex Mono',monospace; font-size:.9rem; border:1px solid var(--line); border-radius:7px; padding:7px 9px; background:var(--surface); color:var(--ink); width:100%; }
+  .f input:focus{ outline:2px solid var(--accent); outline-offset:1px; }
+
+  .example-note{ font-size:.76rem; color:var(--gold); background:var(--gold-soft); border-radius:7px; padding:7px 10px; margin-bottom:14px; display:flex; justify-content:space-between; gap:10px; align-items:center; }
+  .example-note button{ background:none; border:none; color:inherit; text-decoration:underline; cursor:pointer; font-size:inherit; font-family:inherit; padding:0; }
+
+  .results{ display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; margin:6px 0 18px; }
+  @media (max-width:780px){ .results{ grid-template-columns:repeat(2,minmax(0,1fr)); } }
+  .tile{ background:var(--surface-2); border-radius:9px; padding:12px 14px; border-left:3px solid var(--line); }
+  .tile .label{ font-size:.72rem; color:var(--ink-dim); }
+  .tile .valor{ font-size:1.05rem; font-weight:600; margin-top:2px; }
+  .tile.good{ border-left-color:var(--good); }
+  .tile.good .valor{ color:var(--good); }
+  .tile.bad{ border-left-color:var(--bad); }
+  .tile.bad .valor{ color:var(--bad); }
+  .tile.accent{ border-left-color:var(--accent); background:var(--accent-soft); }
+  .tile.accent .valor{ color:var(--accent); }
+
+  .conf{ font-size:.78rem; border-radius:7px; padding:7px 10px; margin-bottom:14px; }
+  .conf.ok{ color:var(--good); background:var(--good-soft); }
+  .conf.warn{ color:var(--bad); background:var(--bad-soft); }
+
+  .actions-row{ display:flex; gap:8px; margin-top:6px; }
+
+  table{ width:100%; border-collapse:collapse; font-size:.85rem; }
+  thead th{ text-align:right; font-size:.72rem; color:var(--ink-dim); font-weight:500; padding:6px 8px; border-bottom:1px solid var(--line); }
+  thead th:first-child, tbody td:first-child{ text-align:left; }
+  tbody td{ text-align:right; padding:8px 8px; border-bottom:1px solid var(--line); }
+  tbody tr:last-child td{ border-bottom:none; }
+  tbody td.pos{ color:var(--good); } tbody td.neg{ color:var(--bad); }
+  .row-actions{ display:flex; gap:4px; justify-content:flex-end; }
+  .icon-btn{ background:none; border:none; color:var(--ink-faint); cursor:pointer; font-size:.85rem; padding:2px 4px; }
+  .icon-btn:hover{ color:var(--ink); }
+
+  .chart-wrap{ margin-bottom:18px; position:relative; }
+  .chart-wrap svg{ width:100%; height:180px; display:block; overflow:visible; }
+  .chart-tooltip{ position:absolute; pointer-events:none; background:var(--ink); color:var(--paper); font-size:.72rem; border-radius:6px; padding:5px 8px; transform:translate(-50%,-110%); white-space:nowrap; opacity:0; transition:opacity .1s; }
+
+  .modal-backdrop{ position:fixed; inset:0; background:rgba(10,15,13,.45); display:flex; align-items:center; justify-content:center; padding:16px; z-index:20; }
+  .modal{ background:var(--surface); border-radius:12px; padding:22px; width:100%; max-width:420px; box-shadow:var(--shadow); }
+  .modal h3{ margin:0 0 4px; font-size:1.05rem; }
+  .modal p.hint{ font-size:.8rem; color:var(--ink-dim); margin:0 0 16px; }
+  .modal label.field-label{ font-size:.78rem; color:var(--ink-dim); display:block; margin:14px 0 6px; }
+  .modal input[type=text]{ width:100%; font-family:inherit; font-size:.9rem; border:1px solid var(--line); border-radius:7px; padding:8px 10px; background:var(--surface); color:var(--ink); }
+  .tpl-option{ display:flex; gap:10px; align-items:flex-start; border:1px solid var(--line); border-radius:8px; padding:10px; margin-top:8px; cursor:pointer; }
+  .tpl-option:hover{ background:var(--surface-2); }
+  .tpl-option.selected{ border-color:var(--accent); background:var(--accent-soft); }
+  .tpl-option input{ margin-top:3px; }
+  .tpl-option .tname{ font-weight:600; font-size:.86rem; }
+  .tpl-option .tdesc{ font-size:.76rem; color:var(--ink-dim); margin-top:1px; }
+  .modal-actions{ display:flex; justify-content:flex-end; gap:8px; margin-top:20px; }
+
+  [hidden]{ display:none !important; }
+
+  .login-wrap{ min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }
+  .login-card{ background:var(--surface); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow); padding:32px 28px; width:100%; max-width:360px; }
+  .login-card h1{ font-size:1.3rem; margin:0 0 4px; font-weight:600; }
+  .login-card .sub{ color:var(--ink-dim); font-size:.82rem; margin-bottom:22px; }
+  .login-card label{ font-size:.78rem; color:var(--ink-dim); display:block; margin:14px 0 6px; }
+  .login-card input[type=email], .login-card input[type=password]{ width:100%; font-family:inherit; font-size:.92rem; border:1px solid var(--line); border-radius:8px; padding:9px 11px; background:var(--surface); color:var(--ink); }
+  .login-card .btn{ width:100%; justify-content:center; margin-top:20px; }
+  .login-error{ color:var(--bad); background:var(--bad-soft); font-size:.78rem; border-radius:7px; padding:8px 10px; margin-top:14px; }
+  .login-note{ color:var(--ink-faint); font-size:.74rem; margin-top:16px; text-align:center; }
+  .login-link{ background:none; border:none; color:var(--accent); font-size:.78rem; cursor:pointer; padding:0; margin-top:10px; display:inline; }
+  .config-warning{ max-width:480px; background:var(--bad-soft); color:var(--bad); border-radius:10px; padding:18px 20px; font-size:.85rem; line-height:1.5; }
+  .config-warning code{ background:rgba(0,0,0,.08); padding:1px 5px; border-radius:4px; }
+  .user-pill{ display:inline-flex; align-items:center; gap:8px; font-size:.78rem; color:var(--ink-dim); }
+  .user-pill button{ background:none; border:none; color:var(--accent); cursor:pointer; font-size:.78rem; padding:0; }
+</style>
+</head>
+<body>
+
+<div id="login-screen" hidden></div>
+<div id="app" hidden></div>
+
+<script>
+(function(){
+
+  /* ---------- helpers ---------- */
+  function fmtBRL(n){
+    if(n===null||n===undefined||isNaN(n)) n=0;
+    var s = Math.abs(n).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
+    return (n<0?'-R$ ':'R$ ') + s;
+  }
+  function parseBR(str){
+    if(str===undefined||str===null) return 0;
+    str = String(str).trim();
+    if(str==='') return 0;
+    str = str.replace(/[^0-9,.\-]/g,'');
+    if(str.indexOf(',')>-1 && str.indexOf('.')>-1){
+      str = str.replace(/\./g,'').replace(',', '.');
+    } else if(str.indexOf(',')>-1){
+      str = str.replace(',', '.');
+    }
+    var n = parseFloat(str);
+    return isNaN(n)?0:n;
+  }
+  var MESES = ['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
+  function monthLabel(comp){
+    if(!comp) return '—';
+    var parts = comp.split('-'); var y=parts[0], m=parseInt(parts[1],10)-1;
+    return MESES[m]+'/'+y;
+  }
+  function currentMonthStr(){
+    var d = new Date();
+    return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
+  }
+  function uid(prefix){ return prefix+'_'+Math.random().toString(36).slice(2,10)+Date.now().toString(36); }
+  function round2(n){ return Math.round((n+Number.EPSILON)*100)/100; }
+
+  /* ---------- Firebase: projeto escudo-calculadora ---------- */
+  var FIREBASE_CONFIG = {
+    apiKey: "AIzaSyAH5G8T46_YKheWo5mhNjigIhbBTGAcJ3c",
+    authDomain: "escudo-calculadora.firebaseapp.com",
+    projectId: "escudo-calculadora",
+    storageBucket: "escudo-calculadora.firebasestorage.app",
+    messagingSenderId: "786635857324",
+    appId: "1:786635857324:web:376be1d032f244a0612e09"
+  };
+
+  /* ---------- bank templates ---------- */
+  var TEMPLATES = {
+    bradesco: {
+      id:'bradesco', nome:'Bradesco', taxMode:'split',
+      resumo:'Renda/IOF/IRRF acumulados no Saldo Anterior, no Resgate e no Saldo Final do mês, como no extrato.',
+      groups: [
+        { key:'conta', title:'Saldo da conta', fields:[
+          {key:'saldoAnterior', label:'Saldo do mês anterior', help:'Saldo no último dia do mês conciliado'}
+        ]},
+        { key:'renda', title:'Renda Total (R$) acumulada', fields:[
+          {key:'renda_ant', label:'No Saldo Anterior'},
+          {key:'renda_res', label:'No Resgate/Vencimento'},
+          {key:'renda_fin', label:'No Saldo Final do mês'}
+        ]},
+        { key:'iof', title:'IOF (R$) acumulado', fields:[
+          {key:'iof_ant', label:'No Saldo Anterior'},
+          {key:'iof_res', label:'No Resgate/Vencimento'},
+          {key:'iof_fin', label:'No Saldo Final do mês'}
+        ]},
+        { key:'irrf', title:'IRRF (R$) acumulado', fields:[
+          {key:'irrf_ant', label:'No Saldo Anterior'},
+          {key:'irrf_res', label:'No Resgate/Vencimento'},
+          {key:'irrf_fin', label:'No Saldo Final do mês'}
+        ]}
+      ],
+      calc: function(v){
+        var rendimento = v.renda_res + v.renda_fin - v.renda_ant;
+        var irrf = v.irrf_res + v.irrf_fin - v.irrf_ant;
+        var iof = v.iof_res + v.iof_fin - v.iof_ant;
+        var lancamentos = 0;
+        var saldoAtual = v.saldoAnterior + lancamentos + rendimento - irrf - iof;
+        return {rendimento:rendimento, irrf:irrf, iof:iof, lancamentos:lancamentos, saldoAtual:saldoAtual};
+      },
+      example: {saldoAnterior:39493.78, renda_ant:4.66, renda_res:0.78, renda_fin:10.35, iof_ant:0.41, iof_res:0, iof_fin:0.79, irrf_ant:0.88, irrf_res:0.14, irrf_fin:2.03}
+    },
+    caixa: {
+      id:'caixa', nome:'CDB Caixa', taxMode:'combined',
+      resumo:'Provisão do mês = acumulado do mês atual − acumulado do mês anterior (Rend. Bruto e Prev. IR+IOF), mais o efeito de um resgate no meio do mês, se houver.',
+      groups: [
+        { key:'conta', title:'Saldo da conta', fields:[
+          {key:'saldoAnterior', label:'Saldo do mês anterior'}
+        ]},
+        { key:'rend', title:'Rend. Bruto Acumulado', fields:[
+          {key:'rend_atual', label:'Mês Atual'},
+          {key:'rend_anterior', label:'Mês Anterior'}
+        ]},
+        { key:'imp', title:'Prev. IR + IOF (acumulado)', fields:[
+          {key:'imp_atual', label:'Mês Atual'},
+          {key:'imp_anterior', label:'Mês Anterior'}
+        ]},
+        { key:'resgate', title:'Se houve resgate no mês', optional:true, fields:[
+          {key:'resgate_liquido', label:'Resgate líquido'},
+          {key:'resgate_irrf', label:'IRRF s/ Resgate'},
+          {key:'resgate_rendimento', label:'Rendimento s/ Resgate'}
+        ]}
+      ],
+      calc: function(v){
+        var provRend = v.rend_atual - v.rend_anterior;
+        var provImp = v.imp_atual - v.imp_anterior;
+        var rendimento = provRend + v.resgate_rendimento;
+        var irrf = provImp + v.resgate_irrf;
+        var iof = 0;
+        var lancamentos = 0;
+        var saldoAtual = v.saldoAnterior + lancamentos + rendimento - irrf - iof;
+        return {rendimento:rendimento, irrf:irrf, iof:iof, lancamentos:lancamentos, saldoAtual:saldoAtual};
+      },
+      example: {saldoAnterior:2164395.65, rend_atual:323015.34, rend_anterior:299190.61, imp_atual:56527.68, imp_anterior:52358.35, resgate_liquido:0, resgate_irrf:0, resgate_rendimento:0}
+    },
+    safra: {
+      id:'safra', nome:'Safra', taxMode:'split',
+      resumo:'Renda do dia + variação do resultado (Principal − Saldo Bruto) entre hoje e o mês anterior; IR e IOF pela mesma lógica de mês atual − mês anterior.',
+      groups: [
+        { key:'conta', title:'Saldo da conta', fields:[
+          {key:'saldoAnterior', label:'Saldo do mês anterior'},
+        ]},
+        { key:'ref', title:'Saldo final do extrato (conferência)', optional:true, fields:[
+          {key:'saldoFinalRef', label:'Saldo final informado pelo banco', help:'Só para confirmar o resultado do cálculo'}
+        ]},
+        { key:'posicao', title:'Renda e posição da aplicação', fields:[
+          {key:'renda_hoje', label:'Renda Total do dia'},
+          {key:'pos_hoje_principal', label:'Principal — hoje'},
+          {key:'pos_hoje_bruto', label:'Saldo Bruto — hoje'},
+          {key:'pos_ant_principal', label:'Principal — mês anterior'},
+          {key:'pos_ant_bruto', label:'Saldo Bruto — mês anterior'}
+        ]},
+        { key:'ir', title:'IRRF', fields:[
+          {key:'ir_hoje', label:'Valor IR do dia'},
+          {key:'ir_atual', label:'Valor IR — mês atual'},
+          {key:'ir_anterior', label:'Valor IR — mês anterior'}
+        ]},
+        { key:'iof', title:'IOF', fields:[
+          {key:'iof_hoje', label:'Valor IOF do dia'},
+          {key:'iof_atual', label:'Valor IOF — mês atual'},
+          {key:'iof_anterior', label:'Valor IOF — mês anterior'}
+        ]},
+        { key:'lanc', title:'Lançamentos no mês (depósitos/saques)', optional:true, fields:[
+          {key:'lanc1', label:'Lançamento 1'}, {key:'lanc2', label:'Lançamento 2'}, {key:'lanc3', label:'Lançamento 3'}
+        ]}
+      ],
+      calc: function(v){
+        var resultHoje = v.pos_hoje_principal - v.pos_hoje_bruto;
+        var resultAnt = v.pos_ant_principal - v.pos_ant_bruto;
+        var rendimento = v.renda_hoje + (resultHoje - resultAnt);
+        var irrf = v.ir_hoje + (v.ir_atual - v.ir_anterior);
+        var iof = v.iof_hoje + (v.iof_atual - v.iof_anterior);
+        var lancamentos = v.lanc1 + v.lanc2 + v.lanc3;
+        var saldoAtual = v.saldoAnterior + lancamentos + rendimento - irrf - iof;
+        return {rendimento:rendimento, irrf:irrf, iof:iof, lancamentos:lancamentos, saldoAtual:saldoAtual, saldoFinalRef:v.saldoFinalRef};
+      },
+      example: {saldoAnterior:189567.66, saldoFinalRef:190876.86, renda_hoje:11.44, pos_hoje_principal:176000, pos_hoje_bruto:176982.25, pos_ant_principal:189300, pos_ant_bruto:191281.19, ir_hoje:2.28, ir_atual:403.91, ir_anterior:204.85, iof_hoje:0, iof_atual:0.42, iof_anterior:0.58, lanc1:500, lanc2:0, lanc3:0}
+    },
+    generico: {
+      id:'generico', nome:'Genérico (entrada manual)', taxMode:'split',
+      resumo:'Para uma aplicação que ainda não segue nenhum dos padrões acima: você digita direto o rendimento, IRRF e IOF já apurados do mês.',
+      groups: [
+        { key:'conta', title:'Saldo da conta', fields:[
+          {key:'saldoAnterior', label:'Saldo do mês anterior'}
+        ]},
+        { key:'resultado', title:'Resultado do mês', fields:[
+          {key:'rendimento_manual', label:'Rendimento do mês'},
+          {key:'irrf_manual', label:'IRRF do mês'},
+          {key:'iof_manual', label:'IOF do mês'}
+        ]},
+        { key:'lanc', title:'Lançamentos no mês (depósitos/saques)', optional:true, fields:[
+          {key:'lanc1', label:'Lançamento 1'}, {key:'lanc2', label:'Lançamento 2'}, {key:'lanc3', label:'Lançamento 3'}
+        ]}
+      ],
+      calc: function(v){
+        var rendimento = v.rendimento_manual, irrf = v.irrf_manual, iof = v.iof_manual;
+        var lancamentos = v.lanc1 + v.lanc2 + v.lanc3;
+        var saldoAtual = v.saldoAnterior + lancamentos + rendimento - irrf - iof;
+        return {rendimento:rendimento, irrf:irrf, iof:iof, lancamentos:lancamentos, saldoAtual:saldoAtual};
+      },
+      example: {saldoAnterior:0, rendimento_manual:0, irrf_manual:0, iof_manual:0, lanc1:0, lanc2:0, lanc3:0}
+    }
+  };
+  var TEMPLATE_ORDER = ['bradesco','caixa','safra','generico'];
+
+  function allFieldKeys(tpl){
+    var keys = [];
+    tpl.groups.forEach(function(g){ g.fields.forEach(function(f){ keys.push(f.key); }); });
+    return keys;
+  }
+  function blankValues(tpl){
+    var v = {}; allFieldKeys(tpl).forEach(function(k){ v[k]=0; }); return v;
+  }
+
+  /* ---------- state ---------- */
+  var state = {
+    contas: [],
+    competencias: {},
+    selectedContaId: null,
+    activeTab: 'novo',
+    formValues: {},
+    formCompetencia: '',
+    formShowExampleNote: false,
+    editingCompetenciaId: null,
+    storageMode: null
+  };
+
+  /* ---------- storage layer (Firestore compartilhado por todos os logados) ---------- */
+  var db = null;
+  var currentUser = null;
+
+  function seedDefaultContas(){
+    return [
+      {id:'bradesco', nome:'Aplicação Bradesco', templateId:'bradesco', criadoEm:Date.now()},
+      {id:'caixa', nome:'CDB Caixa', templateId:'caixa', criadoEm:Date.now()},
+      {id:'safra', nome:'Aplicação Safra', templateId:'safra', criadoEm:Date.now()}
+    ];
+  }
+
+  function contaSort(a,b){ return a.criadoEm - b.criadoEm; }
+
+  function competenciaSort(list){
+    return list.slice().sort(function(a,b){ return a.competencia < b.competencia ? -1 : (a.competencia>b.competencia?1:0); });
+  }
+
+  function startApp(user){
+    currentUser = user;
+    db = firebase.firestore();
+    state.storageMode = 'cloud';
+    document.getElementById('login-screen').hidden = true;
+    document.getElementById('app').hidden = false;
+    subscribeDb();
+  }
+
+  function stopApp(){
+    currentUser = null;
+    db = null;
+    document.getElementById('app').hidden = true;
+    renderLogin();
+  }
+
+  function subscribeDb(){
+    db.collection('contas').onSnapshot(function(snap){
+      var contas = snap.docs.map(function(d){ var data = d.data()||{}; return {id:d.id, nome:data.nome, templateId:data.templateId, criadoEm:data.criadoEm||0}; });
+      contas.sort(contaSort);
+      state.contas = contas;
+      if(contas.length===0){
+        seedDefaultContas().forEach(function(c){
+          db.collection('contas').doc(c.id).set({nome:c.nome, templateId:c.templateId, criadoEm:c.criadoEm});
+        });
+      }
+      if(!state.selectedContaId && contas.length) state.selectedContaId = contas[0].id;
+      render();
+    }, function(err){ console.warn('contas onSnapshot error', err); });
+
+    db.collection('competencias').onSnapshot(function(snap){
+      var byConta = {};
+      snap.docs.forEach(function(d){
+        var data = d.data()||{};
+        if(!byConta[data.contaId]) byConta[data.contaId] = [];
+        byConta[data.contaId].push({id:d.id, competencia:data.competencia, values:data.values, resultado:data.resultado});
+      });
+      Object.keys(byConta).forEach(function(k){ byConta[k] = competenciaSort(byConta[k]); });
+      state.competencias = byConta;
+      render();
+    }, function(err){ console.warn('competencias onSnapshot error', err); });
+  }
+
+  function persistConta(conta){
+    db.collection('contas').doc(conta.id).set({nome:conta.nome, templateId:conta.templateId, criadoEm:conta.criadoEm});
+  }
+
+  function persistCompetencia(contaId, competencia, values, resultado, existingId){
+    var docId = existingId || (contaId + '__' + competencia);
+    var payload = {contaId:contaId, competencia:competencia, values:values, resultado:resultado, atualizadoEm:Date.now(), atualizadoPor: currentUser ? currentUser.email : null};
+    db.collection('competencias').doc(docId).set(payload);
+  }
+
+  function deleteCompetencia(contaId, docId){
+    db.collection('competencias').doc(docId).delete();
+  }
+
+  /* ---------- form logic ---------- */
+  function getConta(id){ return state.contas.find(function(c){ return c.id===id; }); }
+  function getTemplate(conta){ return TEMPLATES[conta.templateId] || TEMPLATES.generico; }
+  function getHistory(contaId){ return state.competencias[contaId] || []; }
+
+  function startNewForm(conta){
+    var tpl = getTemplate(conta);
+    var hist = getHistory(conta.id);
+    state.editingCompetenciaId = null;
+    if(hist.length){
+      var last = hist[hist.length-1];
+      var v = {}; allFieldKeys(tpl).forEach(function(k){ v[k]= (k==='saldoAnterior') ? last.resultado.saldoAtual : 0; });
+      state.formValues = v;
+      state.formShowExampleNote = false;
+      state.formCompetencia = nextMonth(last.competencia);
+    } else if(tpl.example) {
+      state.formValues = Object.assign({}, tpl.example);
+      state.formShowExampleNote = true;
+      state.formCompetencia = '';
+    } else {
+      state.formValues = blankValues(tpl);
+      state.formShowExampleNote = false;
+      state.formCompetencia = '';
+    }
+  }
+
+  function nextMonth(comp){
+    var parts = comp.split('-'); var y=parseInt(parts[0],10), m=parseInt(parts[1],10);
+    m += 1; if(m>12){ m=1; y+=1; }
+    return y + '-' + String(m).padStart(2,'0');
+  }
+
+  function loadFormFromCompetencia(conta, rec){
+    state.editingCompetenciaId = rec.id;
+    state.formValues = Object.assign({}, rec.values);
+    state.formCompetencia = rec.competencia;
+    state.formShowExampleNote = false;
+  }
+
+  function clearForm(conta){
+    var tpl = getTemplate(conta);
+    state.formValues = blankValues(tpl);
+    state.formShowExampleNote = false;
+  }
+
+  function readFormValues(tpl){
+    var v = {};
+    allFieldKeys(tpl).forEach(function(k){
+      var el = document.querySelector('[data-field="'+k+'"]');
+      v[k] = el ? parseBR(el.value) : parseBR(state.formValues[k]);
+    });
+    return v;
+  }
+
+  /* ---------- render ---------- */
+  var root = document.getElementById('app');
+
+  function render(){
+    var conta = state.selectedContaId ? getConta(state.selectedContaId) : null;
+    root.innerHTML = ''
+      + topbarHtml()
+      + '<div class="layout">'
+      +   sidebarHtml()
+      +   '<div class="panel main">' + (conta ? mainHtml(conta) : emptyMainHtml()) + '</div>'
+      + '</div>';
+    wireEvents(conta);
+    if(conta && state.activeTab==='historico') drawChart(conta);
+  }
+
+  function topbarHtml(){
+    return '<div class="topbar">'
+      + '<div><h1 class="display">Calculadora de Aplicações</h1>'
+      + '<div class="sub">Rendimento, IOF e IRRF do mês, banco a banco — histórico compartilhado com a equipe</div></div>'
+      + '<div class="user-pill">'+escapeHtml(currentUser?currentUser.email:'')+'<button id="btn-logout">Sair</button></div>'
+      + '</div>';
+  }
+
+  function sidebarHtml(){
+    var items = state.contas.map(function(c){
+      var hist = getHistory(c.id);
+      var saldo = hist.length ? hist[hist.length-1].resultado.saldoAtual : null;
+      return '<button class="conta-card' + (c.id===state.selectedContaId?' active':'') + '" data-select-conta="'+c.id+'">'
+        + '<span class="nome">'+escapeHtml(c.nome)+'</span>'
+        + '<span class="banco">'+escapeHtml(getTemplate(c).nome)+'</span>'
+        + (saldo!==null ? '<span class="saldo num">'+fmtBRL(saldo)+'</span>' : '<span class="saldo" style="color:var(--ink-faint)">Sem histórico</span>')
+        + '</button>';
+    }).join('');
+    return '<div class="panel sidebar">'
+      + '<div class="sidebar-title">Contas / aplicações</div>'
+      + items
+      + '<button class="btn primary btn-add" id="btn-add-conta">+ Nova conta</button>'
+      + '</div>';
+  }
+
+  function emptyMainHtml(){
+    return '<div class="empty">Nenhuma conta cadastrada ainda. Crie uma pelo botão “+ Nova conta”.</div>';
+  }
+
+  function mainHtml(conta){
+    var tpl = getTemplate(conta);
+    var hist = getHistory(conta.id);
+    var saldoAtual = hist.length ? hist[hist.length-1].resultado.saldoAtual : null;
+    var html = '<div class="main-header">'
+      + '<div><h2>'+escapeHtml(conta.nome)+'</h2><span class="badge">'+escapeHtml(tpl.nome)+'</span></div>'
+      + (saldoAtual!==null ? '<div class="saldo-hero"><div class="label">Saldo atual</div><div class="valor num">'+fmtBRL(saldoAtual)+'</div></div>' : '')
+      + '</div>';
+    html += '<div class="tabs">'
+      + '<button class="tab'+(state.activeTab==='novo'?' active':'')+'" data-tab="novo">Novo cálculo</button>'
+      + '<button class="tab'+(state.activeTab==='historico'?' active':'')+'" data-tab="historico">Histórico'+(hist.length?' ('+hist.length+')':'')+'</button>'
+      + '</div>';
+    html += '<div class="tab-body">' + (state.activeTab==='novo' ? formTabHtml(conta,tpl) : historyTabHtml(conta,hist)) + '</div>';
+    return html;
+  }
+
+  function fieldsGridHtml(fields, cols){
+    var cls = cols===1 ? 'cols-1' : (cols===2 ? 'cols-2' : '');
+    return '<div class="fields-grid '+cls+'">' + fields.map(function(f){
+      var val = state.formValues[f.key];
+      var display = (val===0 || val===undefined) ? '' : String(val).replace('.',',');
+      return '<div class="f"><label>'+escapeHtml(f.label)+(f.help?'<span class="help">'+escapeHtml(f.help)+'</span>':'')+'</label>'
+        + '<input type="text" inputmode="decimal" placeholder="0,00" data-field="'+f.key+'" value="'+escapeHtml(display)+'"></div>';
+    }).join('') + '</div>';
+  }
+
+  function formTabHtml(conta, tpl){
+    var html = '';
+    if(state.formShowExampleNote){
+      html += '<div class="example-note"><span>Preenchido com os valores da sua planilha atual ('+escapeHtml(tpl.nome)+') — ajuste para o mês que está calculando.</span><button id="btn-clear-example">limpar</button></div>';
+    }
+    html += '<div class="field-row"><label style="font-size:.8rem;color:var(--ink-dim)">Competência (mês/ano)</label>'
+      + '<input type="month" class="month-input" id="input-competencia" value="'+escapeHtml(state.formCompetencia)+'"></div>';
+
+    tpl.groups.forEach(function(g){
+      var cols = g.fields.length<=2 ? g.fields.length : (g.fields.length===3?3:3);
+      if(g.optional){
+        var hasValues = g.fields.some(function(f){ return parseBR(state.formValues[f.key])!==0; });
+        html += '<details class="group optional"'+(hasValues?' open':'')+'><summary>'+escapeHtml(g.title)+'</summary>'
+          + fieldsGridHtml(g.fields, cols) + '</details>';
+      } else {
+        html += '<fieldset class="group"><legend>'+escapeHtml(g.title)+'</legend>' + fieldsGridHtml(g.fields, cols) + '</fieldset>';
+      }
+    });
+
+    html += '<div id="result-area"></div>';
+
+    html += '<div class="actions-row">'
+      + '<button class="btn primary" id="btn-salvar" disabled>Salvar mês</button>'
+      + '<button class="btn ghost" id="btn-limpar">Limpar</button>'
+      + '</div>';
+    return html;
+  }
+
+  function computeCurrent(tpl){
+    var v = readFormValues(tpl);
+    return {values:v, resultado: tpl.calc(v)};
+  }
+
+  function resultAreaHtml(tpl, computed){
+    if(!computed) return '';
+    var r = computed.resultado;
+    var tiles = '';
+    tiles += tile('Rendimento', r.rendimento, r.rendimento>=0?'good':'bad');
+    if(tpl.taxMode==='combined'){
+      tiles += tile('IRRF + IOF', r.irrf, r.irrf<=0?'good':'bad');
+    } else {
+      tiles += tile('IRRF', r.irrf, r.irrf<=0?'good':'bad');
+      tiles += tile('IOF', r.iof, r.iof<=0?'good':'bad');
+    }
+    if(r.lancamentos) tiles += tile('Lançamentos', r.lancamentos, 'neutral');
+    tiles += tile('Saldo Atual', r.saldoAtual, 'accent');
+    var conf = '';
+    if(r.saldoFinalRef){
+      var diff = round2(r.saldoAtual - r.saldoFinalRef);
+      if(Math.abs(diff) < 0.01){
+        conf = '<div class="conf ok">✓ Confere com o saldo final informado pelo extrato.</div>';
+      } else {
+        conf = '<div class="conf warn">Diferença de '+fmtBRL(diff)+' em relação ao saldo final informado. Revise os valores.</div>';
+      }
+    }
+    return conf + '<div class="results">'+tiles+'</div>';
+  }
+
+  function tile(label, valor, tone){
+    var cls = tone==='good' ? 'good' : (tone==='bad' ? 'bad' : (tone==='accent' ? 'accent' : ''));
+    return '<div class="tile '+cls+'"><div class="label">'+escapeHtml(label)+'</div><div class="valor num">'+fmtBRL(valor)+'</div></div>';
+  }
+
+  function historyTabHtml(conta, hist){
+    if(!hist.length){
+      return '<div class="empty">Nenhum mês salvo ainda para esta conta. Calcule e salve o primeiro mês na aba “Novo cálculo”.</div>';
+    }
+    var chart = '<div class="chart-wrap" id="chart-wrap"><svg id="chart-svg"></svg><div class="chart-tooltip" id="chart-tooltip"></div></div>';
+    var rows = hist.slice().reverse().map(function(rec){
+      var r = rec.resultado;
+      return '<tr>'
+        + '<td>'+monthLabel(rec.competencia)+'</td>'
+        + '<td class="num '+(r.rendimento>=0?'pos':'neg')+'">'+fmtBRL(r.rendimento)+'</td>'
+        + '<td class="num">'+fmtBRL(r.irrf + (r.iof||0))+'</td>'
+        + '<td class="num">'+fmtBRL(r.saldoAtual)+'</td>'
+        + '<td><div class="row-actions">'
+        +   '<button class="icon-btn" data-edit-comp="'+rec.id+'" title="Editar">✎</button>'
+        +   '<button class="icon-btn" data-del-comp="'+rec.id+'" title="Excluir">✕</button>'
+        + '</div></td>'
+        + '</tr>';
+    }).join('');
+    var table = '<table><thead><tr><th style="text-align:left">Mês</th><th>Rendimento</th><th>Impostos</th><th>Saldo Atual</th><th></th></tr></thead><tbody>'+rows+'</tbody></table>';
+    return chart + table;
+  }
+
+  function drawChart(conta){
+    var hist = getHistory(conta.id);
+    if(hist.length<1) return;
+    var svg = document.getElementById('chart-svg');
+    if(!svg) return;
+    var w = svg.clientWidth || 900, h = 180;
+    var padL=48, padR=14, padT=16, padB=26;
+    var vals = hist.map(function(r){ return r.resultado.saldoAtual; });
+    var min = Math.min.apply(null, vals), max = Math.max.apply(null, vals);
+    if(min===max){ min -= 1; max += 1; }
+    var pad = (max-min)*0.12;
+    min -= pad; max += pad;
+    var innerW = w-padL-padR, innerH = h-padT-padB;
+    function x(i){ return padL + (hist.length===1 ? innerW/2 : i/(hist.length-1)*innerW); }
+    function y(v){ return padT + innerH - (v-min)/(max-min)*innerH; }
+
+    var accent = getComputedStyle(document.body).getPropertyValue('--accent').trim() || '#0e6b5c';
+    var line = getComputedStyle(document.body).getPropertyValue('--line').trim() || '#ddd';
+    var inkDim = getComputedStyle(document.body).getPropertyValue('--ink-dim').trim() || '#666';
+
+    var gridLines = '', gridLabels = '';
+    for(var g=0; g<3; g++){
+      var gv = min + (max-min)*g/2;
+      var gy = y(gv);
+      gridLines += '<line x1="'+padL+'" y1="'+gy+'" x2="'+(w-padR)+'" y2="'+gy+'" stroke="'+line+'" stroke-width="1" />';
+      gridLabels += '<text x="'+(padL-8)+'" y="'+(gy+3)+'" font-size="10" text-anchor="end" fill="'+inkDim+'" font-family="IBM Plex Mono, monospace">'+fmtShort(gv)+'</text>';
+    }
+
+    var points = hist.map(function(r,i){ return [x(i), y(r.resultado.saldoAtual)]; });
+    var pathD = points.map(function(p,i){ return (i===0?'M':'L')+p[0].toFixed(1)+','+p[1].toFixed(1); }).join(' ');
+    var areaD = pathD + ' L'+points[points.length-1][0].toFixed(1)+','+(padT+innerH)+' L'+points[0][0].toFixed(1)+','+(padT+innerH)+' Z';
+
+    var labels = '';
+    hist.forEach(function(r,i){
+      if(hist.length<=8 || i===0 || i===hist.length-1 || i%Math.ceil(hist.length/6)===0){
+        labels += '<text x="'+x(i)+'" y="'+(h-8)+'" font-size="10" text-anchor="middle" fill="'+inkDim+'" font-family="IBM Plex Mono, monospace">'+monthLabel(r.competencia)+'</text>';
+      }
+    });
+
+    var circles = points.map(function(p,i){
+      return '<circle cx="'+p[0].toFixed(1)+'" cy="'+p[1].toFixed(1)+'" r="3.5" fill="'+accent+'" data-idx="'+i+'" class="chart-pt" />';
+    }).join('');
+
+    svg.setAttribute('viewBox', '0 0 '+w+' '+h);
+    svg.innerHTML = gridLines + gridLabels
+      + '<path d="'+areaD+'" fill="'+accent+'" opacity="0.12" stroke="none"/>'
+      + '<path d="'+pathD+'" fill="none" stroke="'+accent+'" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>'
+      + circles + labels;
+
+    var tooltip = document.getElementById('chart-tooltip');
+    svg.querySelectorAll('.chart-pt').forEach(function(c){
+      c.addEventListener('mouseenter', function(){
+        var i = parseInt(c.getAttribute('data-idx'),10);
+        var rec = hist[i];
+        var cx = parseFloat(c.getAttribute('cx')), cy = parseFloat(c.getAttribute('cy'));
+        tooltip.textContent = monthLabel(rec.competencia)+' · '+fmtBRL(rec.resultado.saldoAtual);
+        tooltip.style.left = cx+'px';
+        tooltip.style.top = cy+'px';
+        tooltip.style.opacity = '1';
+      });
+      c.addEventListener('mouseleave', function(){ tooltip.style.opacity='0'; });
+    });
+  }
+
+  function fmtShort(n){
+    var abs = Math.abs(n);
+    if(abs>=1000000) return (n/1000000).toFixed(1).replace('.',',')+'M';
+    if(abs>=1000) return (n/1000).toFixed(0)+'k';
+    return n.toFixed(0);
+  }
+
+  function escapeHtml(s){
+    return String(s===undefined||s===null?'':s).replace(/[&<>"']/g, function(c){
+      return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+    });
+  }
+
+  /* ---------- events ---------- */
+  function wireEvents(conta){
+    var logoutBtn = document.getElementById('btn-logout');
+    if(logoutBtn) logoutBtn.addEventListener('click', function(){ firebase.auth().signOut(); });
+    document.getElementById('btn-add-conta').addEventListener('click', openAddContaModal);
+    document.querySelectorAll('[data-select-conta]').forEach(function(el){
+      el.addEventListener('click', function(){
+        state.selectedContaId = el.getAttribute('data-select-conta');
+        state.activeTab = 'novo';
+        var c = getConta(state.selectedContaId);
+        startNewForm(c);
+        render();
+      });
+    });
+    if(!conta) return;
+    var tpl = getTemplate(conta);
+
+    document.querySelectorAll('[data-tab]').forEach(function(el){
+      el.addEventListener('click', function(){
+        state.activeTab = el.getAttribute('data-tab');
+        if(state.activeTab==='novo' && !Object.keys(state.formValues).length) startNewForm(conta);
+        render();
+      });
+    });
+
+    if(state.activeTab==='novo'){
+      if(!Object.keys(state.formValues).length) startNewForm(conta);
+
+      function recompute(){
+        var computed = computeCurrent(tpl);
+        window.__lastComputed = computed;
+        document.getElementById('result-area').innerHTML = resultAreaHtml(tpl, computed);
+        updateSaveEnabled();
+      }
+
+      var compInput = document.getElementById('input-competencia');
+      if(compInput) compInput.addEventListener('input', function(){
+        state.formCompetencia = compInput.value;
+        updateSaveEnabled();
+      });
+
+      document.querySelectorAll('[data-field]').forEach(function(el){
+        el.addEventListener('input', function(){
+          state.formValues[el.getAttribute('data-field')] = el.value;
+          recompute();
+        });
+      });
+
+      var exBtn = document.getElementById('btn-clear-example');
+      if(exBtn) exBtn.addEventListener('click', function(){ clearForm(conta); render(); });
+
+      document.getElementById('btn-limpar').addEventListener('click', function(){ clearForm(conta); state.formCompetencia=''; state.editingCompetenciaId=null; render(); });
+
+      document.getElementById('btn-salvar').addEventListener('click', function(){
+        var computed = window.__lastComputed || computeCurrent(tpl);
+        if(!state.formCompetencia){ return; }
+        persistCompetencia(conta.id, state.formCompetencia, computed.values, computed.resultado, state.editingCompetenciaId);
+        state.editingCompetenciaId = null;
+      });
+
+      recompute();
+    } else {
+      document.querySelectorAll('[data-edit-comp]').forEach(function(el){
+        el.addEventListener('click', function(){
+          var id = el.getAttribute('data-edit-comp');
+          var rec = getHistory(conta.id).find(function(r){ return r.id===id; });
+          if(rec){ loadFormFromCompetencia(conta, rec); state.activeTab='novo'; render(); }
+        });
+      });
+      document.querySelectorAll('[data-del-comp]').forEach(function(el){
+        el.addEventListener('click', function(){
+          var id = el.getAttribute('data-del-comp');
+          deleteCompetencia(conta.id, id);
+        });
+      });
+    }
+  }
+
+  function updateSaveEnabled(){
+    var btn = document.getElementById('btn-salvar');
+    if(btn) btn.disabled = !state.formCompetencia;
+  }
+
+  /* ---------- add conta modal ---------- */
+  function openAddContaModal(){
+    var backdrop = document.createElement('div');
+    backdrop.className = 'modal-backdrop';
+    var selectedTpl = 'generico';
+    function renderModal(){
+      backdrop.innerHTML = '<div class="modal">'
+        + '<h3>Nova conta / aplicação</h3>'
+        + '<p class="hint">Escolha o padrão de cálculo que combina com o extrato do banco.</p>'
+        + '<label class="field-label">Nome da conta</label>'
+        + '<input type="text" id="modal-nome" placeholder="Ex: CDB Itaú">'
+        + '<label class="field-label">Modelo de cálculo</label>'
+        + TEMPLATE_ORDER.map(function(id){
+            var t = TEMPLATES[id];
+            return '<label class="tpl-option'+(selectedTpl===id?' selected':'')+'" data-tpl-opt="'+id+'">'
+              + '<input type="radio" name="tpl" value="'+id+'" '+(selectedTpl===id?'checked':'')+'>'
+              + '<span><span class="tname">'+escapeHtml(t.nome)+'</span><span class="tdesc">'+escapeHtml(t.resumo)+'</span></span>'
+              + '</label>';
+          }).join('')
+        + '<div class="modal-actions">'
+        +   '<button class="btn ghost" id="modal-cancel">Cancelar</button>'
+        +   '<button class="btn primary" id="modal-create">Criar conta</button>'
+        + '</div></div>';
+      backdrop.querySelectorAll('[data-tpl-opt]').forEach(function(el){
+        el.addEventListener('click', function(){ selectedTpl = el.getAttribute('data-tpl-opt'); renderModal(); });
+      });
+      backdrop.querySelector('#modal-cancel').addEventListener('click', function(){ backdrop.remove(); });
+      backdrop.querySelector('#modal-create').addEventListener('click', function(){
+        var nome = backdrop.querySelector('#modal-nome').value.trim();
+        if(!nome) nome = TEMPLATES[selectedTpl].nome;
+        var conta = {id:uid('conta'), nome:nome, templateId:selectedTpl, criadoEm:Date.now()};
+        persistConta(conta);
+        state.selectedContaId = conta.id;
+        state.activeTab = 'novo';
+        startNewForm(conta);
+        backdrop.remove();
+        render();
+      });
+    }
+    renderModal();
+    document.body.appendChild(backdrop);
+  }
+
+  /* ---------- login ---------- */
+  function renderLogin(errorMsg, infoMsg){
+    var el = document.getElementById('login-screen');
+    el.hidden = false;
+    document.getElementById('app').hidden = true;
+    el.innerHTML = '<div class="login-wrap"><div class="login-card">'
+      + '<h1 class="display">Calculadora de Aplicações</h1>'
+      + '<div class="sub">Entre com o e-mail e senha cadastrados pela sua empresa</div>'
+      + '<label>E-mail</label><input type="email" id="login-email" autocomplete="username">'
+      + '<label>Senha</label><input type="password" id="login-senha" autocomplete="current-password">'
+      + '<button class="btn primary" id="btn-login">Entrar</button>'
+      + '<button class="login-link" id="btn-forgot">Esqueci minha senha</button>'
+      + (errorMsg ? '<div class="login-error">'+escapeHtml(errorMsg)+'</div>' : '')
+      + (infoMsg ? '<div class="login-note">'+escapeHtml(infoMsg)+'</div>' : '')
+      + '<div class="login-note">Não tem acesso ainda? Fale com quem administra a calculadora na empresa.</div>'
+      + '</div></div>';
+
+    function doLogin(){
+      var email = document.getElementById('login-email').value.trim();
+      var senha = document.getElementById('login-senha').value;
+      if(!email || !senha){ renderLogin('Preencha e-mail e senha.'); return; }
+      firebase.auth().signInWithEmailAndPassword(email, senha).catch(function(err){
+        var msg = 'Não foi possível entrar. Confira e-mail e senha.';
+        if(err && err.code==='auth/too-many-requests') msg = 'Muitas tentativas. Aguarde um pouco e tente de novo.';
+        renderLogin(msg);
+      });
+    }
+    document.getElementById('btn-login').addEventListener('click', doLogin);
+    document.getElementById('login-senha').addEventListener('keydown', function(e){ if(e.key==='Enter') doLogin(); });
+    document.getElementById('btn-forgot').addEventListener('click', function(){
+      var email = document.getElementById('login-email').value.trim();
+      if(!email){ renderLogin('Digite seu e-mail acima e clique em "Esqueci minha senha" de novo.'); return; }
+      firebase.auth().sendPasswordResetEmail(email).then(function(){
+        renderLogin(null, 'Se esse e-mail estiver cadastrado, enviamos um link de redefinição de senha.');
+      }).catch(function(){
+        renderLogin(null, 'Se esse e-mail estiver cadastrado, enviamos um link de redefinição de senha.');
+      });
+    });
+  }
+
+  function renderConfigWarning(){
+    document.getElementById('login-screen').hidden = false;
+    document.getElementById('login-screen').innerHTML = '<div class="login-wrap"><div class="config-warning">'
+      + '<strong>Falta configurar o Firebase.</strong><br><br>'
+      + 'Abra o arquivo <code>index.html</code>, procure por <code>FIREBASE_CONFIG</code> perto do início do script, '
+      + 'e cole ali as credenciais do seu projeto Firebase (veja o passo a passo no <code>LEIA-ME.md</code> desta pasta).'
+      + '</div></div>';
+  }
+
+  /* ---------- boot ---------- */
+  if(FIREBASE_CONFIG.apiKey === 'COLOQUE_AQUI'){
+    renderConfigWarning();
+  } else {
+    try{
+      firebase.initializeApp(FIREBASE_CONFIG);
+      firebase.auth().onAuthStateChanged(function(user){
+        if(user) startApp(user); else stopApp();
+      });
+    }catch(e){
+      renderConfigWarning();
+    }
+  }
+
+  if('serviceWorker' in navigator){
+    window.addEventListener('load', function(){
+      navigator.serviceWorker.register('sw.js').catch(function(){});
+    });
+  }
+
+})();
+</script>
+</body>
+</html>

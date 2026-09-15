@@ -87,16 +87,11 @@
   .conta-card .banco{ font-size:.72rem; color:var(--ink-dim); }
   .conta-card .meta{ font-size:.72rem; color:var(--ink-dim); font-family:'IBM Plex Mono',monospace; }
   .conta-card .saldo{ font-size:.82rem; margin-top:2px; }
-  .conta-search{ width:100%; font-family:inherit; font-size:.85rem; border:1px solid var(--line); border-radius:8px; padding:8px 10px; background:var(--surface); color:var(--ink); margin-bottom:2px; }
-  .bank-filter{ display:flex; flex-wrap:wrap; gap:6px; padding:0 2px 4px; }
-  .chip{ font-family:inherit; font-size:.76rem; font-weight:500; padding:5px 10px; border-radius:999px; border:1px solid var(--line); background:var(--surface); color:var(--ink-dim); cursor:pointer; display:inline-flex; align-items:center; gap:4px; }
-  .chip:hover{ background:var(--surface-2); }
-  .chip.active{ background:var(--accent-soft); border-color:var(--accent); color:var(--ink); font-weight:600; }
-  .chip .count{ font-family:'IBM Plex Mono',monospace; font-weight:400; opacity:.75; }
-  .conta-group{ display:flex; flex-direction:column; gap:2px; }
-  .conta-group-header{ display:flex; align-items:baseline; justify-content:space-between; font-size:.72rem; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-faint); padding:10px 8px 2px; }
-  .conta-group-header .count{ font-family:'IBM Plex Mono',monospace; text-transform:none; letter-spacing:0; }
-  .sidebar-empty-filter{ font-size:.82rem; color:var(--ink-dim); padding:10px 8px; }
+  .bank-block{ display:flex; flex-direction:column; gap:6px; padding-bottom:10px; border-bottom:1px solid var(--line); }
+  .bank-block:last-of-type{ border-bottom:none; padding-bottom:0; }
+  .bank-block-header{ display:flex; align-items:baseline; justify-content:space-between; font-size:.72rem; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-faint); padding:6px 2px 0; }
+  .bank-block-header .count{ font-family:'IBM Plex Mono',monospace; text-transform:none; letter-spacing:0; }
+  .bank-select{ width:100%; font-family:inherit; font-size:.85rem; border:1px solid var(--line); border-radius:8px; padding:8px 10px; background:var(--surface); color:var(--ink); }
 
   .btn{ font-family:inherit; font-size:.85rem; font-weight:500; border-radius:8px; border:1px solid var(--line); background:var(--surface); color:var(--ink); padding:9px 14px; cursor:pointer; display:inline-flex; align-items:center; gap:6px; }
   .btn:hover{ background:var(--surface-2); }
@@ -418,9 +413,7 @@
     formCompetencia: '',
     formShowExampleNote: false,
     editingCompetenciaId: null,
-    storageMode: null,
-    contaFilter: '',
-    contaBankFilter: null
+    storageMode: null
   };
 
   /* ---------- storage layer (Firestore compartilhado por todos os logados) ---------- */
@@ -612,8 +605,7 @@
     var metaParts = [];
     if(c.numeroConta) metaParts.push('Conta '+c.numeroConta);
     if(c.codSienge) metaParts.push('Sienge '+c.codSienge);
-    var searchKey = [c.nome, c.numeroConta, c.codSienge, getTemplate(c).nome].filter(Boolean).join(' ').toLowerCase();
-    return '<button class="conta-card' + (c.id===state.selectedContaId?' active':'') + '" data-select-conta="'+c.id+'" data-search="'+escapeHtml(searchKey)+'">'
+    return '<button class="conta-card active" data-select-conta="'+c.id+'">'
       + '<span class="nome">'+escapeHtml(c.nome)+'</span>'
       + (metaParts.length ? '<span class="meta">'+escapeHtml(metaParts.join(' · '))+'</span>' : '')
       + (saldo!==null ? '<span class="saldo num">'+fmtBRL(saldo)+'</span>' : '<span class="saldo" style="color:var(--ink-faint)">Sem histórico</span>')
@@ -624,48 +616,26 @@
     var byTpl = {};
     state.contas.forEach(function(c){ (byTpl[c.templateId] = byTpl[c.templateId]||[]).push(c); });
     var availableTpls = TEMPLATE_ORDER.filter(function(id){ return byTpl[id] && byTpl[id].length; });
-    if(state.contaBankFilter && !byTpl[state.contaBankFilter]) state.contaBankFilter = null;
 
-    var chipsHtml = '<div class="bank-filter">'
-      + '<button class="chip'+(!state.contaBankFilter?' active':'')+'" data-bank-filter="">Todos <span class="count">'+state.contas.length+'</span></button>'
-      + availableTpls.map(function(id){
-          return '<button class="chip'+(state.contaBankFilter===id?' active':'')+'" data-bank-filter="'+id+'">'+escapeHtml(TEMPLATES[id].nome)+' <span class="count">'+byTpl[id].length+'</span></button>';
-        }).join('')
-      + '</div>';
-
-    var visibleTpls = state.contaBankFilter ? [state.contaBankFilter] : availableTpls;
-    var groupsHtml = visibleTpls.map(function(tplId){
-      var list = byTpl[tplId] || [];
-      var cardsHtml = list.map(contaCardHtml).join('');
-      return '<div class="conta-group" data-group="'+tplId+'">'
-        + (state.contaBankFilter ? '' : '<div class="conta-group-header"><span>'+escapeHtml(TEMPLATES[tplId].nome)+'</span><span class="count">'+list.length+'</span></div>')
-        + cardsHtml
+    var blocksHtml = availableTpls.map(function(tplId){
+      var list = byTpl[tplId];
+      var selected = list.find(function(c){ return c.id === state.selectedContaId; });
+      var optionsHtml = '<option value="">Selecione a conta...</option>' + list.map(function(c){
+        var label = c.nome + (c.numeroConta ? ' — Conta ' + c.numeroConta : '');
+        return '<option value="'+c.id+'"'+(selected && selected.id===c.id?' selected':'')+'>'+escapeHtml(label)+'</option>';
+      }).join('');
+      return '<div class="bank-block">'
+        + '<div class="bank-block-header"><span>'+escapeHtml(TEMPLATES[tplId].nome)+'</span><span class="count">'+list.length+'</span></div>'
+        + '<select class="bank-select" data-bank-select="'+tplId+'">' + optionsHtml + '</select>'
+        + (selected ? contaCardHtml(selected) : '')
         + '</div>';
     }).join('');
+
     return '<div class="panel sidebar">'
       + '<div class="sidebar-title">Contas / aplicações</div>'
-      + chipsHtml
-      + '<input type="text" id="conta-search" class="conta-search" placeholder="Buscar empreendimento, conta ou Sienge...">'
-      + '<div id="conta-groups">' + groupsHtml + '</div>'
-      + '<div class="sidebar-empty-filter" id="conta-empty-filter" hidden>Nenhuma conta encontrada.</div>'
+      + blocksHtml
       + '<button class="btn primary btn-add" id="btn-add-conta">+ Nova conta</button>'
       + '</div>';
-  }
-
-  function applyContaFilter(){
-    var q = (state.contaFilter||'').trim().toLowerCase();
-    var anyVisible = false;
-    document.querySelectorAll('.conta-card').forEach(function(el){
-      var match = !q || (el.getAttribute('data-search')||'').indexOf(q) !== -1;
-      el.hidden = !match;
-      if(match) anyVisible = true;
-    });
-    document.querySelectorAll('.conta-group').forEach(function(g){
-      var visible = Array.prototype.some.call(g.querySelectorAll('.conta-card'), function(el){ return !el.hidden; });
-      g.hidden = !visible;
-    });
-    var emptyEl = document.getElementById('conta-empty-filter');
-    if(emptyEl) emptyEl.hidden = anyVisible || !q;
   }
 
   function emptyMainHtml(){
@@ -870,22 +840,17 @@
     var logoutBtn = document.getElementById('btn-logout');
     if(logoutBtn) logoutBtn.addEventListener('click', function(){ firebase.auth().signOut(); });
     document.getElementById('btn-add-conta').addEventListener('click', openAddContaModal);
-    document.querySelectorAll('[data-bank-filter]').forEach(function(el){
-      el.addEventListener('click', function(){
-        var val = el.getAttribute('data-bank-filter');
-        state.contaBankFilter = val || null;
+    document.querySelectorAll('[data-bank-select]').forEach(function(el){
+      el.addEventListener('change', function(){
+        var id = el.value;
+        if(!id) return;
+        state.selectedContaId = id;
+        state.activeTab = 'novo';
+        var c = getConta(id);
+        startNewForm(c);
         render();
       });
     });
-    var searchEl = document.getElementById('conta-search');
-    if(searchEl){
-      searchEl.value = state.contaFilter || '';
-      searchEl.addEventListener('input', function(){
-        state.contaFilter = searchEl.value;
-        applyContaFilter();
-      });
-      applyContaFilter();
-    }
     document.querySelectorAll('[data-select-conta]').forEach(function(el){
       el.addEventListener('click', function(){
         state.selectedContaId = el.getAttribute('data-select-conta');

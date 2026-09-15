@@ -220,6 +220,15 @@
     var s = Math.abs(n).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
     return (n<0?'-R$ ':'R$ ') + s;
   }
+  // Igual ao fmtBRL, mas sempre mostra o sinal (+ ou -) explicitamente,
+  // pra ficar claro quando um valor de imposto foi lançado como recebimento (+)
+  // em vez de dedução (-).
+  function fmtBRLSigned(n){
+    if(n===null||n===undefined||isNaN(n)) n=0;
+    var s = Math.abs(n).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
+    var sinal = n<0 ? '-' : (n>0 ? '+' : '');
+    return sinal + 'R$ ' + s;
+  }
   function parseBR(str){
     if(str===undefined||str===null) return 0;
     str = String(str).trim();
@@ -712,10 +721,12 @@
     var tiles = '';
     tiles += tile('Rendimento', r.rendimento, r.rendimento>=0?'good':'bad');
     if(tpl.taxMode==='combined'){
-      tiles += tile('IRRF + IOF', r.irrf, r.irrf<=0?'good':'bad');
+      // Mostra o efeito no saldo (-irrf): dedução normal aparece com "-",
+      // e quando vira recebimento/crédito no mês aparece com "+".
+      tiles += tile('IRRF + IOF', -r.irrf, r.irrf<=0?'good':'bad', true);
     } else {
-      tiles += tile('IRRF', r.irrf, r.irrf<=0?'good':'bad');
-      tiles += tile('IOF', r.iof, r.iof<=0?'good':'bad');
+      tiles += tile('IRRF', -r.irrf, r.irrf<=0?'good':'bad', true);
+      tiles += tile('IOF', -r.iof, r.iof<=0?'good':'bad', true);
     }
     if(r.lancamentos) tiles += tile('Lançamentos', r.lancamentos, 'neutral');
     tiles += tile('Saldo Atual', r.saldoAtual, 'accent');
@@ -731,9 +742,10 @@
     return conf + '<div class="results">'+tiles+'</div>';
   }
 
-  function tile(label, valor, tone){
+  function tile(label, valor, tone, signed){
     var cls = tone==='good' ? 'good' : (tone==='bad' ? 'bad' : (tone==='accent' ? 'accent' : ''));
-    return '<div class="tile '+cls+'"><div class="label">'+escapeHtml(label)+'</div><div class="valor num">'+fmtBRL(valor)+'</div></div>';
+    var texto = signed ? fmtBRLSigned(valor) : fmtBRL(valor);
+    return '<div class="tile '+cls+'"><div class="label">'+escapeHtml(label)+'</div><div class="valor num">'+texto+'</div></div>';
   }
 
   function historyTabHtml(conta, hist){

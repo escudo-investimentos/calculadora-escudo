@@ -83,7 +83,13 @@
   .conta-card.active{ background:var(--accent-soft); border-color:var(--accent); }
   .conta-card .nome{ font-weight:600; font-size:.92rem; }
   .conta-card .banco{ font-size:.72rem; color:var(--ink-dim); }
+  .conta-card .meta{ font-size:.72rem; color:var(--ink-dim); font-family:'IBM Plex Mono',monospace; }
   .conta-card .saldo{ font-size:.82rem; margin-top:2px; }
+  .conta-search{ width:100%; font-family:inherit; font-size:.85rem; border:1px solid var(--line); border-radius:8px; padding:8px 10px; background:var(--surface); color:var(--ink); margin-bottom:2px; }
+  .conta-group{ display:flex; flex-direction:column; gap:2px; }
+  .conta-group-header{ display:flex; align-items:baseline; justify-content:space-between; font-size:.72rem; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-faint); padding:10px 8px 2px; }
+  .conta-group-header .count{ font-family:'IBM Plex Mono',monospace; text-transform:none; letter-spacing:0; }
+  .sidebar-empty-filter{ font-size:.82rem; color:var(--ink-dim); padding:10px 8px; }
 
   .btn{ font-family:inherit; font-size:.85rem; font-weight:500; border-radius:8px; border:1px solid var(--line); background:var(--surface); color:var(--ink); padding:9px 14px; cursor:pointer; display:inline-flex; align-items:center; gap:6px; }
   .btn:hover{ background:var(--surface-2); }
@@ -404,7 +410,8 @@
     formCompetencia: '',
     formShowExampleNote: false,
     editingCompetenciaId: null,
-    storageMode: null
+    storageMode: null,
+    contaFilter: ''
   };
 
   /* ---------- storage layer (Firestore compartilhado por todos os logados) ---------- */
@@ -412,11 +419,41 @@
   var currentUser = null;
 
   function seedDefaultContas(){
-    return [
-      {id:'bradesco', nome:'Aplicação Bradesco', templateId:'bradesco', criadoEm:Date.now()},
-      {id:'caixa', nome:'CDB Caixa', templateId:'caixa', criadoEm:Date.now()},
-      {id:'safra', nome:'Aplicação Safra', templateId:'safra', criadoEm:Date.now()}
+    var t0 = Date.now();
+    var rows = [
+      // Bradesco
+      ['bradesco','Escudo','27180-2','INV 27180-2'],
+      ['bradesco','Jardim Napoli','522-3','APLF522-3'],
+      ['bradesco','Bela Cintra','517-7 (BL)','APLF517-7'],
+      ['bradesco','Bela Cintra Prime','519-3','APLF519-3'],
+      ['bradesco','Holandeses','520-7','APLF520-7'],
+      ['bradesco','Practice','3969-1','3969-1APL'],
+      ['bradesco','Plaza das Flores II','518-5','APLF518-5'],
+      ['bradesco','Jardim de Evora','APL6343','APL6343'],
+      ['bradesco','SETAI','APL6629','APL6629'],
+      ['bradesco','Jardim Florença SPE','APL6610','APL6610'],
+      ['bradesco','Jardim Florença SPE','APL-AGORA','APL-AGORA'],
+      ['bradesco','Jardim Florença SPE','SOLARO-FIF','SOLARO-FIF'],
+      ['bradesco','Jardim Florença SPE','MAPFRE-FIF','MAPFRE-FIF'],
+      ['bradesco','Jardim de Evora','APLC-AGORA','APLC-AGORA'],
+      // Safra
+      ['safra','Escudo','249-9','2499'],
+      ['safra','Jardim Napoli','582345-8','SAFRA582345-8'],
+      ['safra','Jardim Evora','587717-5','SAFRA587717-5'],
+      // CDB Caixa
+      ['caixa','Jardim de Evora','550-4','CDB550-4'],
+      ['caixa','Jardim Florença','555-5','CDBFL555-5']
     ];
+    return rows.map(function(r, i){
+      return {
+        id: uid('conta'),
+        nome: r[1],
+        templateId: r[0],
+        numeroConta: r[2],
+        codSienge: r[3],
+        criadoEm: t0 + i
+      };
+    });
   }
 
   function contaSort(a,b){ return a.criadoEm - b.criadoEm; }
@@ -443,12 +480,12 @@
 
   function subscribeDb(){
     db.collection('contas').onSnapshot(function(snap){
-      var contas = snap.docs.map(function(d){ var data = d.data()||{}; return {id:d.id, nome:data.nome, templateId:data.templateId, criadoEm:data.criadoEm||0}; });
+      var contas = snap.docs.map(function(d){ var data = d.data()||{}; return {id:d.id, nome:data.nome, templateId:data.templateId, numeroConta:data.numeroConta||'', codSienge:data.codSienge||'', criadoEm:data.criadoEm||0}; });
       contas.sort(contaSort);
       state.contas = contas;
       if(contas.length===0){
         seedDefaultContas().forEach(function(c){
-          db.collection('contas').doc(c.id).set({nome:c.nome, templateId:c.templateId, criadoEm:c.criadoEm});
+          db.collection('contas').doc(c.id).set({nome:c.nome, templateId:c.templateId, numeroConta:c.numeroConta||'', codSienge:c.codSienge||'', criadoEm:c.criadoEm});
         });
       }
       if(!state.selectedContaId && contas.length) state.selectedContaId = contas[0].id;
@@ -469,7 +506,7 @@
   }
 
   function persistConta(conta){
-    db.collection('contas').doc(conta.id).set({nome:conta.nome, templateId:conta.templateId, criadoEm:conta.criadoEm});
+    db.collection('contas').doc(conta.id).set({nome:conta.nome, templateId:conta.templateId, numeroConta:conta.numeroConta||'', codSienge:conta.codSienge||'', criadoEm:conta.criadoEm});
   }
 
   function persistCompetencia(contaId, competencia, values, resultado, existingId){
@@ -559,21 +596,54 @@
       + '</div>';
   }
 
+  function contaCardHtml(c){
+    var hist = getHistory(c.id);
+    var saldo = hist.length ? hist[hist.length-1].resultado.saldoAtual : null;
+    var metaParts = [];
+    if(c.numeroConta) metaParts.push('Conta '+c.numeroConta);
+    if(c.codSienge) metaParts.push('Sienge '+c.codSienge);
+    var searchKey = [c.nome, c.numeroConta, c.codSienge, getTemplate(c).nome].filter(Boolean).join(' ').toLowerCase();
+    return '<button class="conta-card' + (c.id===state.selectedContaId?' active':'') + '" data-select-conta="'+c.id+'" data-search="'+escapeHtml(searchKey)+'">'
+      + '<span class="nome">'+escapeHtml(c.nome)+'</span>'
+      + (metaParts.length ? '<span class="meta">'+escapeHtml(metaParts.join(' · '))+'</span>' : '')
+      + (saldo!==null ? '<span class="saldo num">'+fmtBRL(saldo)+'</span>' : '<span class="saldo" style="color:var(--ink-faint)">Sem histórico</span>')
+      + '</button>';
+  }
+
   function sidebarHtml(){
-    var items = state.contas.map(function(c){
-      var hist = getHistory(c.id);
-      var saldo = hist.length ? hist[hist.length-1].resultado.saldoAtual : null;
-      return '<button class="conta-card' + (c.id===state.selectedContaId?' active':'') + '" data-select-conta="'+c.id+'">'
-        + '<span class="nome">'+escapeHtml(c.nome)+'</span>'
-        + '<span class="banco">'+escapeHtml(getTemplate(c).nome)+'</span>'
-        + (saldo!==null ? '<span class="saldo num">'+fmtBRL(saldo)+'</span>' : '<span class="saldo" style="color:var(--ink-faint)">Sem histórico</span>')
-        + '</button>';
+    var byTpl = {};
+    state.contas.forEach(function(c){ (byTpl[c.templateId] = byTpl[c.templateId]||[]).push(c); });
+    var groupsHtml = TEMPLATE_ORDER.filter(function(id){ return byTpl[id] && byTpl[id].length; }).map(function(tplId){
+      var list = byTpl[tplId];
+      var cardsHtml = list.map(contaCardHtml).join('');
+      return '<div class="conta-group" data-group="'+tplId+'">'
+        + '<div class="conta-group-header"><span>'+escapeHtml(TEMPLATES[tplId].nome)+'</span><span class="count">'+list.length+'</span></div>'
+        + cardsHtml
+        + '</div>';
     }).join('');
     return '<div class="panel sidebar">'
       + '<div class="sidebar-title">Contas / aplicações</div>'
-      + items
+      + '<input type="text" id="conta-search" class="conta-search" placeholder="Buscar empreendimento, conta ou Sienge...">'
+      + '<div id="conta-groups">' + groupsHtml + '</div>'
+      + '<div class="sidebar-empty-filter" id="conta-empty-filter" hidden>Nenhuma conta encontrada.</div>'
       + '<button class="btn primary btn-add" id="btn-add-conta">+ Nova conta</button>'
       + '</div>';
+  }
+
+  function applyContaFilter(){
+    var q = (state.contaFilter||'').trim().toLowerCase();
+    var anyVisible = false;
+    document.querySelectorAll('.conta-card').forEach(function(el){
+      var match = !q || (el.getAttribute('data-search')||'').indexOf(q) !== -1;
+      el.hidden = !match;
+      if(match) anyVisible = true;
+    });
+    document.querySelectorAll('.conta-group').forEach(function(g){
+      var visible = Array.prototype.some.call(g.querySelectorAll('.conta-card'), function(el){ return !el.hidden; });
+      g.hidden = !visible;
+    });
+    var emptyEl = document.getElementById('conta-empty-filter');
+    if(emptyEl) emptyEl.hidden = anyVisible || !q;
   }
 
   function emptyMainHtml(){
@@ -584,8 +654,13 @@
     var tpl = getTemplate(conta);
     var hist = getHistory(conta.id);
     var saldoAtual = hist.length ? hist[hist.length-1].resultado.saldoAtual : null;
+    var metaParts = [];
+    if(conta.numeroConta) metaParts.push('Conta '+conta.numeroConta);
+    if(conta.codSienge) metaParts.push('Cód. Sienge '+conta.codSienge);
     var html = '<div class="main-header">'
-      + '<div><h2>'+escapeHtml(conta.nome)+'</h2><span class="badge">'+escapeHtml(tpl.nome)+'</span></div>'
+      + '<div><h2>'+escapeHtml(conta.nome)+'</h2><span class="badge">'+escapeHtml(tpl.nome)+'</span>'
+      + (metaParts.length ? '<div class="meta" style="margin-top:4px;">'+escapeHtml(metaParts.join(' · '))+'</div>' : '')
+      + '</div>'
       + (saldoAtual!==null ? '<div class="saldo-hero"><div class="label">Saldo atual</div><div class="valor num">'+fmtBRL(saldoAtual)+'</div></div>' : '')
       + '</div>';
     html += '<div class="tabs">'
@@ -773,6 +848,15 @@
     var logoutBtn = document.getElementById('btn-logout');
     if(logoutBtn) logoutBtn.addEventListener('click', function(){ firebase.auth().signOut(); });
     document.getElementById('btn-add-conta').addEventListener('click', openAddContaModal);
+    var searchEl = document.getElementById('conta-search');
+    if(searchEl){
+      searchEl.value = state.contaFilter || '';
+      searchEl.addEventListener('input', function(){
+        state.contaFilter = searchEl.value;
+        applyContaFilter();
+      });
+      applyContaFilter();
+    }
     document.querySelectorAll('[data-select-conta]').forEach(function(el){
       el.addEventListener('click', function(){
         state.selectedContaId = el.getAttribute('data-select-conta');
@@ -860,8 +944,12 @@
       backdrop.innerHTML = '<div class="modal">'
         + '<h3>Nova conta / aplicação</h3>'
         + '<p class="hint">Escolha o padrão de cálculo que combina com o extrato do banco.</p>'
-        + '<label class="field-label">Nome da conta</label>'
-        + '<input type="text" id="modal-nome" placeholder="Ex: CDB Itaú">'
+        + '<label class="field-label">Nome da conta / empreendimento</label>'
+        + '<input type="text" id="modal-nome" placeholder="Ex: Jardim Napoli">'
+        + '<label class="field-label">Número da conta (opcional)</label>'
+        + '<input type="text" id="modal-numero-conta" placeholder="Ex: 522-3">'
+        + '<label class="field-label">Código Sienge (opcional)</label>'
+        + '<input type="text" id="modal-cod-sienge" placeholder="Ex: APLF522-3">'
         + '<label class="field-label">Modelo de cálculo</label>'
         + TEMPLATE_ORDER.map(function(id){
             var t = TEMPLATES[id];
@@ -881,7 +969,9 @@
       backdrop.querySelector('#modal-create').addEventListener('click', function(){
         var nome = backdrop.querySelector('#modal-nome').value.trim();
         if(!nome) nome = TEMPLATES[selectedTpl].nome;
-        var conta = {id:uid('conta'), nome:nome, templateId:selectedTpl, criadoEm:Date.now()};
+        var numeroConta = backdrop.querySelector('#modal-numero-conta').value.trim();
+        var codSienge = backdrop.querySelector('#modal-cod-sienge').value.trim();
+        var conta = {id:uid('conta'), nome:nome, templateId:selectedTpl, numeroConta:numeroConta, codSienge:codSienge, criadoEm:Date.now()};
         persistConta(conta);
         state.selectedContaId = conta.id;
         state.activeTab = 'novo';

@@ -367,7 +367,8 @@
       calc: function(v){
         var resultHoje = v.pos_hoje_principal - v.pos_hoje_bruto;
         var resultAnt = v.pos_ant_principal - v.pos_ant_bruto;
-        var rendimento = v.renda_hoje + (resultHoje - resultAnt);
+        // Confirmado com a planilha real: aqui é (mês anterior - mês atual), não o contrário.
+        var rendimento = v.renda_hoje + (resultAnt - resultHoje);
         var irrf = v.ir_hoje + (v.ir_atual - v.ir_anterior);
         var iof = v.iof_hoje + (v.iof_atual - v.iof_anterior);
         var lancamentos = v.lanc1 + v.lanc2 + v.lanc3;

@@ -200,10 +200,20 @@
   .login-error{ color:var(--bad); background:var(--bad-soft); font-size:.78rem; border-radius:7px; padding:8px 10px; margin-top:14px; }
   .login-note{ color:var(--ink-faint); font-size:.74rem; margin-top:16px; text-align:center; }
   .login-link{ background:none; border:none; color:var(--accent); font-size:.78rem; cursor:pointer; padding:0; margin-top:10px; display:inline; }
+  .login-link.inline{ display:inline; margin:0; text-decoration:underline; }
   .config-warning{ max-width:480px; background:var(--bad-soft); color:var(--bad); border-radius:10px; padding:18px 20px; font-size:.85rem; line-height:1.5; }
   .config-warning code{ background:rgba(0,0,0,.08); padding:1px 5px; border-radius:4px; }
   .user-pill{ display:inline-flex; align-items:center; gap:8px; font-size:.78rem; color:var(--ink-dim); }
   .user-pill button{ background:none; border:none; color:var(--accent); cursor:pointer; font-size:.78rem; padding:0; }
+  .pending-bell{ background:var(--bad-soft); color:var(--bad); border:1px solid transparent; border-radius:8px; padding:7px 12px; font-size:.78rem; font-weight:600; cursor:pointer; }
+  .pending-bell:hover{ filter:brightness(0.97); }
+  .pending-panel{ width:100%; background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:10px; margin-top:10px; display:flex; flex-direction:column; gap:8px; }
+  .pending-row{ display:flex; align-items:center; justify-content:space-between; gap:10px; padding:8px 10px; background:var(--surface-2); border-radius:8px; flex-wrap:wrap; }
+  .pending-info{ display:flex; flex-direction:column; font-size:.82rem; }
+  .pending-info span{ color:var(--ink-dim); font-size:.76rem; }
+  .pending-actions{ display:flex; gap:8px; }
+  .pending-empty{ color:var(--ink-faint); font-size:.8rem; padding:6px 4px; }
+  .btn.sm{ padding:6px 12px; font-size:.78rem; }
 </style>
 </head>
 <body>
@@ -423,12 +433,17 @@
     formCompetencia: '',
     formShowExampleNote: false,
     editingCompetenciaId: null,
-    storageMode: null
+    storageMode: null,
+    pendingUsers: [],
+    showPending: false
   };
 
   /* ---------- storage layer (Firestore compartilhado por todos os logados) ---------- */
   var db = null;
   var currentUser = null;
+  var isAdmin = false;
+  var pendingUnsub = null;
+  var suppressAuthHandler = false;
 
   function seedDefaultContas(){
     var t0 = Date.now();
@@ -477,17 +492,63 @@
   function startApp(user){
     currentUser = user;
     db = firebase.firestore();
-    state.storageMode = 'cloud';
-    document.getElementById('login-screen').hidden = true;
-    document.getElementById('app').hidden = false;
-    subscribeDb();
+    db.collection('usuarios').doc(user.uid).get().then(function(docSnap){
+      var udata = docSnap.exists ? (docSnap.data()||{}) : null;
+      isAdmin = !!(udata && udata.admin === true);
+      if(!udata || udata.aprovado !== true){
+        renderPending(udata);
+        return;
+      }
+      state.storageMode = 'cloud';
+      document.getElementById('login-screen').hidden = true;
+      document.getElementById('app').hidden = false;
+      subscribeDb();
+      if(isAdmin) subscribePendingUsers(); else render();
+    }).catch(function(err){
+      console.warn('usuarios check error', err);
+      renderPending(null);
+    });
   }
 
   function stopApp(){
     currentUser = null;
+    isAdmin = false;
     db = null;
+    if(pendingUnsub){ pendingUnsub(); pendingUnsub = null; }
+    state.pendingUsers = [];
     document.getElementById('app').hidden = true;
     renderLogin();
+  }
+
+  /* ---------- aprovação de novas contas ---------- */
+  function renderPending(udata){
+    document.getElementById('app').hidden = true;
+    var el = document.getElementById('login-screen');
+    el.hidden = false;
+    el.innerHTML = '<div class="login-wrap"><div class="login-card">'
+      + '<img class="login-logo" src="logo-mark.png" alt="Escudo">'
+      + '<h1 class="display">Conta em análise</h1>'
+      + '<div class="sub">'+ (udata ? 'Sua conta ('+escapeHtml(udata.email||'')+') foi criada e está aguardando aprovação de um administrador da Escudo.' : 'Não encontramos um cadastro de aprovação para esta conta. Fale com um administrador da Escudo.') +'</div>'
+      + '<button class="btn primary" id="btn-pending-logout">Sair</button>'
+      + '</div></div>';
+    document.getElementById('btn-pending-logout').addEventListener('click', function(){ firebase.auth().signOut(); });
+  }
+
+  function subscribePendingUsers(){
+    if(pendingUnsub) pendingUnsub();
+    pendingUnsub = db.collection('usuarios').where('aprovado','==',false).onSnapshot(function(snap){
+      state.pendingUsers = snap.docs.map(function(d){ var data=d.data()||{}; return {id:d.id, nome:data.nome||'', email:data.email||'', criadoEm:data.criadoEm||0}; });
+      state.pendingUsers.sort(function(a,b){ return a.criadoEm - b.criadoEm; });
+      render();
+    }, function(err){ console.warn('usuarios pendentes onSnapshot error', err); });
+  }
+
+  function aprovarUsuario(uid){
+    db.collection('usuarios').doc(uid).set({aprovado:true}, {merge:true});
+  }
+
+  function rejeitarUsuario(uid){
+    db.collection('usuarios').doc(uid).delete();
   }
 
   function subscribeDb(){
@@ -601,12 +662,36 @@
   }
 
   function topbarHtml(){
-    return '<div class="topbar">'
+    var html = '<div class="topbar">'
       + '<div class="brand"><img class="brand-logo" src="logo-mark.png" alt="Escudo">'
       + '<div><h1 class="display">Calculadora de Aplicações</h1>'
       + '<div class="sub">Rendimento, IOF e IRRF do mês, banco a banco — histórico compartilhado com a equipe</div></div></div>'
+      + (isAdmin ? pendingBellHtml() : '')
       + '<div class="user-pill">'+escapeHtml(currentUser?currentUser.email:'')+'<button id="btn-logout">Sair</button></div>'
       + '</div>';
+    if(isAdmin && state.showPending) html += pendingPanelHtml();
+    return html;
+  }
+
+  function pendingBellHtml(){
+    var n = state.pendingUsers.length;
+    if(!n) return '';
+    return '<button class="pending-bell" id="btn-toggle-pending">🔔 '+n+' solicitação'+(n>1?'ões':'')+' de acesso</button>';
+  }
+
+  function pendingPanelHtml(){
+    if(!state.pendingUsers.length){
+      return '<div class="pending-panel"><div class="pending-empty">Nenhuma solicitação pendente.</div></div>';
+    }
+    var rows = state.pendingUsers.map(function(u){
+      return '<div class="pending-row">'
+        + '<div class="pending-info"><strong>'+escapeHtml(u.nome||'(sem nome)')+'</strong><span>'+escapeHtml(u.email)+'</span></div>'
+        + '<div class="pending-actions">'
+        +   '<button class="btn primary sm" data-approve-user="'+escapeHtml(u.id)+'">Aprovar</button>'
+        +   '<button class="btn ghost sm" data-reject-user="'+escapeHtml(u.id)+'">Rejeitar</button>'
+        + '</div></div>';
+    }).join('');
+    return '<div class="pending-panel">'+rows+'</div>';
   }
 
   function contaCardHtml(c){
@@ -852,6 +937,16 @@
   function wireEvents(conta){
     var logoutBtn = document.getElementById('btn-logout');
     if(logoutBtn) logoutBtn.addEventListener('click', function(){ firebase.auth().signOut(); });
+    var togglePending = document.getElementById('btn-toggle-pending');
+    if(togglePending) togglePending.addEventListener('click', function(){ state.showPending = !state.showPending; render(); });
+    document.querySelectorAll('[data-approve-user]').forEach(function(el){
+      el.addEventListener('click', function(){ aprovarUsuario(el.getAttribute('data-approve-user')); });
+    });
+    document.querySelectorAll('[data-reject-user]').forEach(function(el){
+      el.addEventListener('click', function(){
+        if(confirm('Rejeitar esse pedido de acesso?')) rejeitarUsuario(el.getAttribute('data-reject-user'));
+      });
+    });
     document.getElementById('btn-add-conta').addEventListener('click', openAddContaModal);
     document.querySelectorAll('[data-bank-select]').forEach(function(el){
       el.addEventListener('change', function(){
@@ -1006,7 +1101,7 @@
       + '<button class="login-link" id="btn-forgot">Esqueci minha senha</button>'
       + (errorMsg ? '<div class="login-error">'+escapeHtml(errorMsg)+'</div>' : '')
       + (infoMsg ? '<div class="login-note">'+escapeHtml(infoMsg)+'</div>' : '')
-      + '<div class="login-note">Não tem acesso ainda? Fale com quem administra a calculadora na empresa.</div>'
+      + '<div class="login-note">Não tem acesso ainda? <button class="login-link inline" id="btn-go-signup">Criar conta</button> — sua solicitação passa por aprovação antes de liberar o acesso.</div>'
       + '</div></div>';
 
     function doLogin(){
@@ -1030,6 +1125,51 @@
         renderLogin(null, 'Se esse e-mail estiver cadastrado, enviamos um link de redefinição de senha.');
       });
     });
+    document.getElementById('btn-go-signup').addEventListener('click', function(){ renderSignup(); });
+  }
+
+  function renderSignup(errorMsg){
+    var el = document.getElementById('login-screen');
+    el.hidden = false;
+    document.getElementById('app').hidden = true;
+    el.innerHTML = '<div class="login-wrap"><div class="login-card">'
+      + '<img class="login-logo" src="logo-mark.png" alt="Escudo">'
+      + '<h1 class="display">Criar conta</h1>'
+      + '<div class="sub">Depois de criada, sua conta fica aguardando aprovação de um administrador da Escudo antes de você conseguir acessar os dados.</div>'
+      + '<label>Nome</label><input type="text" id="signup-nome" autocomplete="name">'
+      + '<label>E-mail</label><input type="email" id="signup-email" autocomplete="username">'
+      + '<label>Senha (mínimo 6 caracteres)</label><input type="password" id="signup-senha" autocomplete="new-password">'
+      + '<label>Confirmar senha</label><input type="password" id="signup-senha2" autocomplete="new-password">'
+      + '<button class="btn primary" id="btn-signup">Criar conta</button>'
+      + '<button class="login-link" id="btn-go-login">Já tenho conta, voltar para o login</button>'
+      + (errorMsg ? '<div class="login-error">'+escapeHtml(errorMsg)+'</div>' : '')
+      + '</div></div>';
+
+    document.getElementById('btn-go-login').addEventListener('click', function(){ renderLogin(); });
+    document.getElementById('btn-signup').addEventListener('click', function(){
+      var nome = document.getElementById('signup-nome').value.trim();
+      var email = document.getElementById('signup-email').value.trim();
+      var senha = document.getElementById('signup-senha').value;
+      var senha2 = document.getElementById('signup-senha2').value;
+      if(!nome || !email || !senha){ renderSignup('Preencha nome, e-mail e senha.'); return; }
+      if(senha.length < 6){ renderSignup('A senha precisa ter pelo menos 6 caracteres.'); return; }
+      if(senha !== senha2){ renderSignup('As senhas não são iguais.'); return; }
+      suppressAuthHandler = true;
+      firebase.auth().createUserWithEmailAndPassword(email, senha).then(function(cred){
+        return firebase.firestore().collection('usuarios').doc(cred.user.uid).set({
+          nome: nome, email: email, aprovado: false, admin: false, criadoEm: Date.now()
+        }).then(function(){ return firebase.auth().signOut(); });
+      }).then(function(){
+        suppressAuthHandler = false;
+        renderLogin(null, 'Conta criada! Assim que um administrador da Escudo aprovar, você já pode entrar normalmente.');
+      }).catch(function(err){
+        suppressAuthHandler = false;
+        var msg = 'Não foi possível criar a conta.';
+        if(err && err.code==='auth/email-already-in-use') msg = 'Esse e-mail já está cadastrado. Tente entrar ou use "Esqueci minha senha".';
+        else if(err && err.code==='auth/invalid-email') msg = 'E-mail inválido.';
+        renderSignup(msg);
+      });
+    });
   }
 
   function renderConfigWarning(){
@@ -1048,6 +1188,7 @@
     try{
       firebase.initializeApp(FIREBASE_CONFIG);
       firebase.auth().onAuthStateChanged(function(user){
+        if(suppressAuthHandler) return;
         if(user) startApp(user); else stopApp();
       });
     }catch(e){

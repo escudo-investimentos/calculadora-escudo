@@ -19,6 +19,8 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<!-- pdf.js, só usado pra ler o extrato em PDF do Safra e preencher o formulário sozinho -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.5.141/pdf.min.js"></script>
 
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
@@ -214,6 +216,13 @@
   .pending-actions{ display:flex; gap:8px; }
   .pending-empty{ color:var(--ink-faint); font-size:.8rem; padding:6px 4px; }
   .btn.sm{ padding:6px 12px; font-size:.78rem; }
+  .pdf-import{ display:flex; flex-wrap:wrap; align-items:center; gap:10px; background:var(--surface-2); border:1px solid var(--line); border-radius:10px; padding:10px 12px; margin-bottom:14px; }
+  .pdf-import .btn.ghost.sm{ cursor:pointer; }
+  .pdf-import-help{ font-size:.76rem; color:var(--ink-dim); flex:1 1 220px; }
+  .pdf-import-status{ width:100%; font-size:.78rem; line-height:1.5; border-radius:8px; padding:8px 10px; }
+  .pdf-import-status.ok{ background:var(--good-soft); color:var(--good); }
+  .pdf-import-status.warn{ background:#fcefd0; color:#8a6512; }
+  .pdf-import-status.error{ background:var(--bad-soft); color:var(--bad); }
 </style>
 </head>
 <body>
@@ -264,6 +273,100 @@
   }
   function uid(prefix){ return prefix+'_'+Math.random().toString(36).slice(2,10)+Date.now().toString(36); }
   function round2(n){ return Math.round((n+Number.EPSILON)*100)/100; }
+
+  /* ---------- leitura do extrato em PDF (Safra) ----------
+     Lê a tabela "Consolidado" da página 1 do demonstrativo mensal do Safra
+     (Produtos Automáticos) e preenche sozinho os campos de Renda/IR/IOF do
+     dia e Posição do dia (Principal/Bruto) do mês atual — e do mês anterior,
+     só na primeira competência cadastrada da conta (depois disso, o "mês
+     anterior" já vem do mês que ficou salvo, ver CARRY_FORWARD acima).
+     As colunas da tabela têm posição fixa no PDF (é um relatório gerado
+     automaticamente pelo banco), calibradas com um extrato real: */
+  var SAFRA_PDF_COL_BOUNDS = [225, 337, 397, 441.5, 482, 526, 566.5, 605.5, 648, 690, 728, 768.5];
+  function safraPdfBinFor(center){
+    var i = 0; while(i < SAFRA_PDF_COL_BOUNDS.length && SAFRA_PDF_COL_BOUNDS[i] <= center) i++; return i;
+  }
+  async function parseSafraStatementPdf(file){
+    if(typeof pdfjsLib === 'undefined'){
+      throw new Error('Não consegui carregar o leitor de PDF agora (sem internet?). Preencha manualmente ou tente de novo.');
+    }
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.5.141/pdf.worker.min.js';
+    var buf = await file.arrayBuffer();
+    var pdf = await pdfjsLib.getDocument({data: buf}).promise;
+    var page = await pdf.getPage(1);
+    var viewport = page.getViewport({scale:1});
+    var content = await page.getTextContent();
+
+    var items = content.items.map(function(it){
+      var str = (it.str || '').trim();
+      if(!str) return null;
+      return {text: str, x: it.transform[4], topY: viewport.height - it.transform[5], width: it.width || 0};
+    }).filter(Boolean);
+
+    items.sort(function(a,b){ return a.topY - b.topY; });
+    var rows = [];
+    items.forEach(function(it){
+      var row = rows.length ? rows[rows.length-1] : null;
+      if(row && Math.abs(it.topY - row.topY) < 3){ row.items.push(it); }
+      else { rows.push({topY: it.topY, items: [it]}); }
+    });
+    rows.forEach(function(r){
+      r.items.sort(function(a,b){ return a.x - b.x; });
+      r.text = r.items.map(function(i){ return i.text; }).join(' ');
+    });
+
+    var fullText = rows.map(function(r){ return r.text; }).join(' ');
+    var contaMatch = fullText.match(/(\d{6,})-(\d)\b/);
+    var contaNumero = contaMatch ? (contaMatch[1].replace(/^0+/, '') + '-' + contaMatch[2]) : null;
+    var clienteRow = rows.find(function(r){ return /(LTDA|S\/A|SPE)\b/.test(r.text) && !/Banco Safra/.test(r.text); });
+
+    var startIdx = rows.findIndex(function(r){ return r.text.trim().toLowerCase() === 'consolidado'; });
+    if(startIdx === -1) throw new Error('Não encontrei a seção "Consolidado" neste PDF — confira se é um demonstrativo mensal do Safra (Produtos Automáticos).');
+    var endIdx = rows.findIndex(function(r, i){ return i > startIdx && /fluxo de caixa/i.test(r.text); });
+    if(endIdx === -1) endIdx = Math.min(rows.length, startIdx + 15);
+
+    var dateRows = [];
+    for(var i = startIdx+1; i < endIdx; i++){
+      var first = rows[i].items[0];
+      if(first && /^\d{2}\/\d{4}$/.test(first.text)){
+        dateRows.push({competencia: first.text, items: rows[i].items.slice(1)});
+      }
+    }
+    if(!dateRows.length) throw new Error('Não encontrei nenhuma linha de resumo mensal (ex.: "10/2026") na seção Consolidado deste PDF.');
+
+    function extractRow(dr){
+      var bins = {};
+      dr.items.forEach(function(it){
+        var bin = safraPdfBinFor(it.x + it.width/2);
+        bins[bin] = parseBR(it.text);
+      });
+      return {
+        competencia: dr.competencia,
+        iof_resgate: bins[3] || 0,
+        ir_resgate: bins[4] || 0,
+        rendimento_bruto: bins[6] || 0,
+        saldo_principal: bins[8],
+        saldo_bruto: bins[9],
+        provisao_iof: bins[10] || 0,
+        provisao_ir: bins[11] || 0,
+        saldo_liquido: bins[12]
+      };
+    }
+
+    var atual = extractRow(dateRows[dateRows.length-1]);
+    var anterior = dateRows.length > 1 ? extractRow(dateRows[dateRows.length-2]) : null;
+    if(atual.saldo_principal === undefined || atual.saldo_bruto === undefined){
+      throw new Error('Não consegui ler a "Posição do dia" (Principal/Bruto) da linha do mês atual — confira o PDF ou preencha manualmente.');
+    }
+    var parts = atual.competencia.split('/'); // MM/AAAA
+    return {
+      competenciaInput: parts[1] + '-' + parts[0],
+      contaNumero: contaNumero,
+      cliente: clienteRow ? clienteRow.text : null,
+      atual: atual,
+      anterior: anterior
+    };
+  }
 
   /* ---------- Firebase: projeto escudo-calculadora ---------- */
   var FIREBASE_CONFIG = {
@@ -319,11 +422,11 @@
         ]},
         { key:'rend', title:'Rend. Bruto Acumulado', fields:[
           {key:'rend_atual', label:'Mês Atual'},
-          {key:'rend_anterior', label:'Mês Anterior'}
+          {key:'rend_anterior', label:'Mês Anterior', help:'Preenchido com o "Mês Atual" que você informou no mês passado — confira com o extrato'}
         ]},
         { key:'imp', title:'Prev. IR + IOF (acumulado)', fields:[
           {key:'imp_atual', label:'Mês Atual'},
-          {key:'imp_anterior', label:'Mês Anterior'}
+          {key:'imp_anterior', label:'Mês Anterior', help:'Preenchido com o "Mês Atual" que você informou no mês passado — confira com o extrato'}
         ]},
         { key:'resgate', title:'Se houve resgate no mês', optional:true, fields:[
           {key:'resgate_liquido', label:'Resgate líquido'},
@@ -354,21 +457,21 @@
           {key:'saldoFinalRef', label:'Saldo final informado pelo banco', help:'Só para confirmar o resultado do cálculo'}
         ]},
         { key:'posicao', title:'Renda e posição da aplicação', fields:[
-          {key:'renda_hoje', label:'Renda Total do dia'},
-          {key:'pos_ant_principal', label:'Principal — mês anterior'},
-          {key:'pos_ant_bruto', label:'Saldo Bruto — mês anterior'},
-          {key:'pos_hoje_principal', label:'Principal — hoje (mês atual)'},
-          {key:'pos_hoje_bruto', label:'Saldo Bruto — hoje (mês atual)'}
+          {key:'renda_hoje', label:'Renda Total do dia', help:'Coluna "Rendimento Pago · Bruto" do extrato, acumulado do mês'},
+          {key:'pos_ant_principal', label:'Principal — mês anterior', help:'Preenchido com o "Principal — hoje" do mês passado — confira com a coluna Posição do dia · Saldo · Principal'},
+          {key:'pos_ant_bruto', label:'Saldo Bruto — mês anterior', help:'Preenchido com o "Saldo Bruto — hoje" do mês passado — confira com a coluna Posição do dia · Saldo · Bruto (não é o Saldo Líquido)'},
+          {key:'pos_hoje_principal', label:'Principal — hoje (mês atual)', help:'Extrato: Posição do dia · Saldo · Principal, no último dia do mês'},
+          {key:'pos_hoje_bruto', label:'Saldo Bruto — hoje (mês atual)', help:'Extrato: Posição do dia · Saldo · Bruto, no último dia do mês (não é o Saldo Líquido)'}
         ]},
         { key:'ir', title:'IRRF', fields:[
-          {key:'ir_hoje', label:'Valor IR do dia'},
-          {key:'ir_atual', label:'Valor IR — mês atual'},
-          {key:'ir_anterior', label:'Valor IR — mês anterior'}
+          {key:'ir_hoje', label:'Valor IR do dia', help:'Coluna "Valor IR" dos resgates, acumulado do mês'},
+          {key:'ir_atual', label:'Valor IR — mês atual', help:'Extrato: Posição do dia · Provisão Impostos · Valor IR, no último dia do mês'},
+          {key:'ir_anterior', label:'Valor IR — mês anterior', help:'Preenchido com o "Valor IR — mês atual" do mês passado — confira com o extrato'}
         ]},
         { key:'iof', title:'IOF', fields:[
-          {key:'iof_hoje', label:'Valor IOF do dia'},
-          {key:'iof_atual', label:'Valor IOF — mês atual'},
-          {key:'iof_anterior', label:'Valor IOF — mês anterior'}
+          {key:'iof_hoje', label:'Valor IOF do dia', help:'Coluna "Valor IOF" dos resgates, acumulado do mês'},
+          {key:'iof_atual', label:'Valor IOF — mês atual', help:'Extrato: Posição do dia · Provisão Impostos · Valor IOF, no último dia do mês'},
+          {key:'iof_anterior', label:'Valor IOF — mês anterior', help:'Preenchido com o "Valor IOF — mês atual" do mês passado — confira com o extrato'}
         ]},
         { key:'lanc', title:'Lançamentos no mês (depósitos/saques)', optional:true, fields:[
           {key:'lanc1', label:'Lançamento 1'}, {key:'lanc2', label:'Lançamento 2'}, {key:'lanc3', label:'Lançamento 3'}
@@ -423,6 +526,15 @@
     var v = {}; allFieldKeys(tpl).forEach(function(k){ v[k]=0; }); return v;
   }
 
+  // Campos de "mês anterior" que, no extrato do banco, são sempre o mesmo número
+  // que o mês passado já informou como "mês atual/hoje". Pra evitar erro de
+  // digitação (reaparecer um extrato de 10 páginas pra achar o mesmo número),
+  // o formulário de um novo mês já traz esses campos preenchidos sozinhos.
+  var CARRY_FORWARD = {
+    safra: {pos_ant_principal:'pos_hoje_principal', pos_ant_bruto:'pos_hoje_bruto', ir_anterior:'ir_atual', iof_anterior:'iof_atual'},
+    caixa: {rend_anterior:'rend_atual', imp_anterior:'imp_atual'}
+  };
+
   /* ---------- state ---------- */
   var state = {
     contas: [],
@@ -435,7 +547,9 @@
     editingCompetenciaId: null,
     storageMode: null,
     pendingUsers: [],
-    showPending: false
+    showPending: false,
+    pdfImportStatus: null, // {type:'ok'|'warn'|'error', lines:[...]} — resultado da última leitura de extrato em PDF
+    pdfImportLoading: false
   };
 
   /* ---------- storage layer (Firestore compartilhado por todos os logados) ---------- */
@@ -603,7 +717,13 @@
     state.editingCompetenciaId = null;
     if(hist.length){
       var last = hist[hist.length-1];
-      var v = {}; allFieldKeys(tpl).forEach(function(k){ v[k]= (k==='saldoAnterior') ? last.resultado.saldoAtual : 0; });
+      var carry = CARRY_FORWARD[tpl.id] || {};
+      var v = {};
+      allFieldKeys(tpl).forEach(function(k){
+        if(k==='saldoAnterior'){ v[k] = last.resultado.saldoAtual; }
+        else if(carry[k] && last.values && last.values[carry[k]] !== undefined){ v[k] = last.values[carry[k]]; }
+        else { v[k] = 0; }
+      });
       state.formValues = v;
       state.formShowExampleNote = false;
       state.formCompetencia = nextMonth(last.competencia);
@@ -768,10 +888,26 @@
     }).join('') + '</div>';
   }
 
+  function pdfImportHtml(conta){
+    var st = state.pdfImportStatus;
+    var html = '<div class="pdf-import">'
+      + '<label class="btn ghost sm" for="safra-pdf-input">'+(state.pdfImportLoading ? 'Lendo o PDF…' : '📄 Importar extrato (PDF)')+'</label>'
+      + '<input type="file" id="safra-pdf-input" accept="application/pdf" style="display:none" '+(state.pdfImportLoading?'disabled':'')+'>'
+      + '<span class="pdf-import-help">Lê o demonstrativo mensal do Safra e preenche a Renda, IR/IOF e a Posição do dia sozinho — confira antes de salvar.</span>';
+    if(st){
+      html += '<div class="pdf-import-status '+st.type+'">' + st.lines.map(function(l){ return '<div>'+escapeHtml(l)+'</div>'; }).join('') + '</div>';
+    }
+    html += '</div>';
+    return html;
+  }
+
   function formTabHtml(conta, tpl){
     var html = '';
     if(state.formShowExampleNote){
       html += '<div class="example-note"><span>Preenchido com os valores da sua planilha atual ('+escapeHtml(tpl.nome)+') — ajuste para o mês que está calculando.</span><button id="btn-clear-example">limpar</button></div>';
+    }
+    if(tpl.id === 'safra'){
+      html += pdfImportHtml(conta);
     }
     html += '<div class="field-row"><label style="font-size:.8rem;color:var(--ink-dim)">Competência (mês/ano)</label>'
       + '<input type="month" class="month-input" id="input-competencia" value="'+escapeHtml(state.formCompetencia)+'"></div>';
@@ -1005,7 +1141,66 @@
       var exBtn = document.getElementById('btn-clear-example');
       if(exBtn) exBtn.addEventListener('click', function(){ clearForm(conta); render(); });
 
-      document.getElementById('btn-limpar').addEventListener('click', function(){ clearForm(conta); state.formCompetencia=''; state.editingCompetenciaId=null; render(); });
+      var pdfInput = document.getElementById('safra-pdf-input');
+      if(pdfInput) pdfInput.addEventListener('change', function(){
+        var file = pdfInput.files && pdfInput.files[0];
+        if(!file) return;
+        state.pdfImportLoading = true;
+        state.pdfImportStatus = null;
+        render();
+        parseSafraStatementPdf(file).then(function(lido){
+          var hist = getHistory(conta.id);
+          var lines = [];
+          var type = 'ok';
+
+          state.formValues.renda_hoje = lido.atual.rendimento_bruto;
+          state.formValues.ir_hoje = lido.atual.ir_resgate;
+          state.formValues.iof_hoje = lido.atual.iof_resgate;
+          state.formValues.pos_hoje_principal = lido.atual.saldo_principal;
+          state.formValues.pos_hoje_bruto = lido.atual.saldo_bruto;
+          state.formValues.ir_atual = lido.atual.provisao_ir;
+          state.formValues.iof_atual = lido.atual.provisao_iof;
+          if(lido.atual.saldo_liquido !== undefined) state.formValues.saldoFinalRef = lido.atual.saldo_liquido;
+
+          if(state.formCompetencia && state.formCompetencia !== lido.competenciaInput){
+            lines.push('Atenção: a competência deste PDF é '+monthLabel(lido.competenciaInput)+', diferente da que está selecionada ('+monthLabel(state.formCompetencia)+'). Confira antes de salvar.');
+            type = 'warn';
+          }
+          state.formCompetencia = lido.competenciaInput;
+
+          if(conta.numeroConta && lido.contaNumero && lido.contaNumero !== conta.numeroConta){
+            lines.push('Atenção: o PDF é da conta '+lido.contaNumero+', e a conta selecionada aqui é '+conta.numeroConta+'. Confira se não é o extrato de outra conta.');
+            type = 'warn';
+          }
+
+          if(!hist.length && lido.anterior){
+            // primeira competência desta conta: também usa o mês anterior do PDF
+            state.formValues.pos_ant_principal = lido.anterior.saldo_principal;
+            state.formValues.pos_ant_bruto = lido.anterior.saldo_bruto;
+            state.formValues.ir_anterior = lido.anterior.provisao_ir;
+            state.formValues.iof_anterior = lido.anterior.provisao_iof;
+          } else if(hist.length && lido.anterior){
+            // já existe mês salvo: mantém o carry-forward, só avisa se o PDF mostrar outra coisa
+            var difPrincipal = Math.abs(parseBR(state.formValues.pos_ant_principal) - lido.anterior.saldo_principal) > 0.01;
+            var difBruto = Math.abs(parseBR(state.formValues.pos_ant_bruto) - lido.anterior.saldo_bruto) > 0.01;
+            if(difPrincipal || difBruto){
+              lines.push('Atenção: a Posição do dia do mês anterior no PDF ('+fmtBRL(lido.anterior.saldo_principal)+' / '+fmtBRL(lido.anterior.saldo_bruto)+') é diferente do que já estava preenchido aqui — confira os campos "mês anterior".');
+              type = 'warn';
+            }
+          }
+
+          lines.unshift('Lido do extrato Safra'+(lido.cliente?' — '+lido.cliente:'')+(lido.contaNumero?' (conta '+lido.contaNumero+')':'')+', competência '+monthLabel(lido.competenciaInput)+'.');
+          state.pdfImportStatus = {type: type, lines: lines};
+          state.pdfImportLoading = false;
+          render();
+        }).catch(function(err){
+          state.pdfImportStatus = {type:'error', lines:[err && err.message ? err.message : 'Não consegui ler esse PDF. Preencha manualmente.']};
+          state.pdfImportLoading = false;
+          render();
+        });
+      });
+
+      document.getElementById('btn-limpar').addEventListener('click', function(){ clearForm(conta); state.formCompetencia=''; state.editingCompetenciaId=null; state.pdfImportStatus=null; render(); });
 
       document.getElementById('btn-salvar').addEventListener('click', function(){
         var computed = window.__lastComputed || computeCurrent(tpl);
